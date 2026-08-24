@@ -1,0 +1,17 @@
+# ------------------------------------------------------------
+# ROS 2 / colcon generated files
+# ------------------------------------------------------------
+
+# Standard colcon workspace directories
+/build/
+/install/
+/log/
+
+# Python packaging / testing artifacts
+*.egg-info/
+.pytest_cache/
+
+# Python cache files
+__pycache__/
+*.py[cod]
+

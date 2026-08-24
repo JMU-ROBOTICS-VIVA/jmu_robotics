@@ -1,0 +1,31 @@
+network:
+  version: 2
+  wifis:
+    JMU-Robotics:
+      renderer: NetworkManager
+      match:
+        name: "wlan0"
+      dhcp4: true
+      dhcp6: false
+      access-points:
+        "JMU-Robotics":
+          hidden: true
+          auth:
+            key-management: "eap"
+            method: "peap"
+            identity: "CsRobotics"
+            #ca-certificate: "/etc/ssl/certs/ca-certificates.crt"
+            phase2-auth: "mschapv2"
+            password: "PASSWORDHERE"
+          networkmanager:
+            uuid: "c03a0add-e845-4fef-8a01-17fe03439b5e"
+            name: "JMU-Robotics"
+            passthrough:
+              wifi-security.auth-alg: "open"
+              connection.autoconnect-priority: "10"
+              802-1x.domain-suffix-match: "jmu.edu"
+              ipv6.addr-gen-mode: "default"
+              ipv6.ip6-privacy: "-1"
+      networkmanager:
+        uuid: "c03a0add-e845-4fef-8a01-17fe03439b5e"
+        name: "JMU-Robotics"

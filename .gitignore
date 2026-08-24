@@ -1,0 +1,19 @@
+# ------------------------------------------------------------
+# Repository-wide ignores
+# ------------------------------------------------------------
+
+# macOS
+.DS_Store
+
+# Editor temporary / backup files
+*~
+*.swp
+*.swo
+
+# VS Code local settings
+.vscode/
+
+# Python cache directories that may appear anywhere
+__pycache__/
+*.py[cod]
+

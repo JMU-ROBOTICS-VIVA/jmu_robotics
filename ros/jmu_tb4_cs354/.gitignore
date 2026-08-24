@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# ROS / colcon artifacts, if ever created locally
+build/
+install/
+log/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store

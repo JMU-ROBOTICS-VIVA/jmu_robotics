@@ -1,0 +1,30 @@
+# ------------------------------------------------------------
+# LaTeX generated files
+# ------------------------------------------------------------
+
+*.aux
+*.bbl
+*.bcf
+*.blg
+*.fdb_latexmk
+*.fls
+*.lof
+*.lot
+*.log
+*.nav
+*.out
+*.run.xml
+*.snm
+*.synctex.gz
+*.toc
+*.vrb
+
+# BibLaTeX / bibliography helper files
+*.xml-blx.bib
+
+# minted temporary directories
+_minted-*/
+
+# Temporary / backup files
+*.bak
+
