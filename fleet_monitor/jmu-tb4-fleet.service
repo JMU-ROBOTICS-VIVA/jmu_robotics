@@ -1,0 +1,24 @@
+[Unit]
+Description=JMU TurtleBot 4 Fleet Status Collector
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=rosrpt
+Group=rosrpt
+Environment=HOME=/var/lib/rosrpt
+WorkingDirectory=/var/lib/rosrpt
+ExecStart=/opt/jmu/fleet-monitor/run_fleet_status.sh
+Restart=on-failure
+RestartSec=5
+
+# Basic service hardening while still allowing ROS networking.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/rosrpt
+
+[Install]
+WantedBy=multi-user.target

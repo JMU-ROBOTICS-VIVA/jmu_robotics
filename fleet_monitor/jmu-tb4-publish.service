@@ -1,0 +1,7 @@
+[Unit]
+Description=Publish JMU TurtleBot Fleet Status to Local Web Root
+After=jmu-tb4-fleet.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/jmu/fleet-monitor/publish_status.sh

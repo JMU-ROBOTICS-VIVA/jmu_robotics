@@ -1,0 +1,9 @@
+[Unit]
+Description=Watch JMU TurtleBot Fleet Status Snapshot
+
+[Path]
+PathChanged=/var/lib/rosrpt/status.json
+Unit=jmu-tb4-publish.service
+
+[Install]
+WantedBy=multi-user.target
