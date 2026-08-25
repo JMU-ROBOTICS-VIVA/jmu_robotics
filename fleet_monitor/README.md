@@ -58,3 +58,12 @@ Useful checks:
     journalctl -u jmu-tb4-publish.service
     sudo -u rosrpt cat /var/lib/rosrpt/status.json
     curl http://localhost/turtlebot/status.json
+
+
+## Low-overhead sampling
+
+Battery and dock topics remain subscribed continuously. LiDAR and camera
+CameraInfo topics are subscribed only for `SAMPLE_WINDOW` seconds before each
+`WRITE_INTERVAL` snapshot. With the defaults, the high-rate subscriptions are
+active for 5 seconds out of each 60-second cycle. Odometry monitoring has been
+removed.

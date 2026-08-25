@@ -25,15 +25,14 @@ PUBLISH_SERVICE_SOURCE="$SCRIPT_DIR/jmu-tb4-publish.service"
 PUBLISH_PATH_SOURCE="$SCRIPT_DIR/jmu-tb4-publish.path"
 WEB_SOURCE="$REPO_ROOT/ros/jmu_tb4_fleet/web/index.html"
 
-# Ansible just runs as root, remove this test
-#if [ "$EUID" -eq 0 ]; then
-#    echo
-#    echo "Do NOT run the whole installer with sudo."
-#    echo "Run:"
-#    echo "  ./fleet_monitor/install.sh"
-#    echo
-#    exit 1
-#fi
+if [ "$EUID" -eq 0 ]; then
+    echo
+    echo "Do NOT run the whole installer with sudo."
+    echo "Run:"
+    echo "  ./fleet_monitor/install.sh"
+    echo
+    exit 1
+fi
 
 for required in \
     /opt/ros/jazzy/setup.bash \

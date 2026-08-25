@@ -1,19 +1,15 @@
 #!/usr/bin/env python3
 
-"""Collect TurtleBot 4 fleet status and write an atomic JSON snapshot.
+"""Low-overhead JMU TurtleBot 4 fleet monitor.
 
-Monitors:
-  * battery state and dock state
-  * LiDAR scan rate and odometry rate
-  * OAK-D RGB and stereo/depth observed rates using CameraInfo messages
-  * OAK-D effective running parameters via /robotN/oakd/get_parameters
+Low-rate battery and dock topics are monitored continuously.
 
-The collector intentionally counts CameraInfo messages rather than image payloads
-so the status computer does not pull seven fleets' worth of image data over Wi-Fi.
+High-rate sensor topics (LiDAR and OAK-D CameraInfo) are subscribed only for a
+short sampling window immediately before each status snapshot. This avoids
+continuously deserializing fleet-wide sensor traffic merely to estimate Hz/FPS.
 """
 
 import argparse
-from collections import deque
 from datetime import datetime, timezone
 import json
 import math
@@ -31,7 +27,6 @@ from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from rclpy.utilities import remove_ros_args
 
 from irobot_create_msgs.msg import DockStatus
-from nav_msgs.msg import Odometry
 from sensor_msgs.msg import BatteryState, CameraInfo, LaserScan
 
 
@@ -64,13 +59,13 @@ BATTERY_HEALTH = {
 }
 
 
+def utc_now_string():
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
 def finite_or_none(value):
     value = float(value)
     return value if math.isfinite(value) else None
-
-
-def utc_now_string():
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 def parameter_value_to_python(value):
@@ -99,7 +94,6 @@ def parameter_value_to_python(value):
 
 
 def expected_depth_fps(params):
-    """Choose a useful expected depth FPS while retaining raw params separately."""
     stereo = params.get("stereo.i_fps")
     if isinstance(stereo, (int, float)) and stereo > 0:
         return float(stereo)
@@ -113,53 +107,41 @@ def expected_depth_fps(params):
 
 
 def stream_health(expected, observed):
-    """Coarse health classification; avoid pretending network rates are exact."""
     if expected is None:
         return "unknown"
     if observed is None:
         return "waiting"
     if observed <= 0.0:
         return "failed"
-    ratio = observed / expected if expected > 0 else 1.0
-    if ratio < 0.80:
+    if expected > 0 and observed / expected < 0.80:
         return "warning"
     return "ok"
 
 
-class RateTracker:
-    def __init__(self, window_seconds, inactive_seconds):
-        self.window_seconds = window_seconds
-        self.inactive_seconds = inactive_seconds
-        self.samples = deque()
+class SampleCounter:
+    """Measure arrival frequency during one finite sample window."""
 
-    def tick(self, now=None):
-        now = time.monotonic() if now is None else now
-        self.samples.append(now)
-        self._trim(now)
+    def __init__(self):
+        self.clear()
 
-    def _trim(self, now):
-        cutoff = now - self.window_seconds
-        while self.samples and self.samples[0] < cutoff:
-            self.samples.popleft()
+    def clear(self):
+        self.count = 0
+        self.first = None
+        self.last = None
 
-    def rate(self, now=None):
-        now = time.monotonic() if now is None else now
-        self._trim(now)
+    def tick(self, now):
+        if self.first is None:
+            self.first = now
+        self.last = now
+        self.count += 1
 
-        if not self.samples:
-            return None
-
-        if now - self.samples[-1] > self.inactive_seconds:
+    def rate(self):
+        if self.count < 2 or self.first is None or self.last is None:
+            return 0.0 if self.count else None
+        elapsed = self.last - self.first
+        if elapsed <= 0:
             return 0.0
-
-        if len(self.samples) < 2:
-            return 0.0
-
-        elapsed = self.samples[-1] - self.samples[0]
-        if elapsed <= 0.0:
-            return 0.0
-
-        return round((len(self.samples) - 1) / elapsed, 2)
+        return round((self.count - 1) / elapsed, 2)
 
 
 class FleetStatus(Node):
@@ -169,8 +151,7 @@ class FleetStatus(Node):
         output_path,
         write_interval,
         stale_seconds,
-        rate_window,
-        stream_inactive_seconds,
+        sample_window,
         parameter_interval,
         stdout,
     ):
@@ -180,16 +161,21 @@ class FleetStatus(Node):
         self.output_path = Path(output_path)
         self.write_interval = write_interval
         self.stale_seconds = stale_seconds
+        self.sample_window = sample_window
         self.parameter_interval = parameter_interval
         self.stdout = stdout
 
-        qos = QoSProfile(
+        self.sensor_qos = QoSProfile(
             depth=10,
             reliability=ReliabilityPolicy.BEST_EFFORT,
             durability=DurabilityPolicy.VOLATILE,
         )
 
         self.state = {}
+        self.sample_subscriptions = []
+        self.sampling = False
+        self.sample_end = None
+        self.next_write = None
 
         for robot in self.robots:
             ns = f"/robot{robot}"
@@ -201,79 +187,63 @@ class FleetStatus(Node):
                 "last_seen": None,
                 "battery": None,
                 "dock": None,
-                "rates": {
-                    name: RateTracker(rate_window, stream_inactive_seconds)
-                    for name in ("scan", "odom", "rgb", "depth")
+                "sample_counters": {
+                    name: SampleCounter()
+                    for name in ("scan", "rgb", "depth")
                 },
+                "sample_rates": {
+                    "scan": None,
+                    "rgb": None,
+                    "depth": None,
+                },
+                "sampled_at": None,
                 "oak_parameters": {},
                 "oak_parameters_last_read": None,
                 "oak_parameter_query_pending": False,
             }
 
+            # Low-rate topics stay subscribed continuously.
             self.create_subscription(
                 BatteryState,
                 f"{ns}/battery_state",
                 lambda msg, r=robot: self._battery_callback(r, msg),
-                qos,
+                self.sensor_qos,
             )
             self.create_subscription(
                 DockStatus,
                 f"{ns}/dock_status",
                 lambda msg, r=robot: self._dock_callback(r, msg),
-                qos,
-            )
-            self.create_subscription(
-                LaserScan,
-                f"{ns}/scan",
-                lambda msg, r=robot: self._rate_callback(r, "scan"),
-                qos,
-            )
-            self.create_subscription(
-                Odometry,
-                f"{ns}/odom",
-                lambda msg, r=robot: self._rate_callback(r, "odom"),
-                qos,
-            )
-            self.create_subscription(
-                CameraInfo,
-                f"{ns}/oakd/rgb/preview/camera_info",
-                lambda msg, r=robot: self._rate_callback(r, "rgb"),
-                qos,
-            )
-            self.create_subscription(
-                CameraInfo,
-                f"{ns}/oakd/stereo/camera_info",
-                lambda msg, r=robot: self._rate_callback(r, "depth"),
-                qos,
+                self.sensor_qos,
             )
 
-            client = self.create_client(
-                GetParameters,
-                f"{ns}/oakd/get_parameters",
-            )
+            client = self.create_client(GetParameters, f"{ns}/oakd/get_parameters")
             self.state[robot]["oak_parameter_client"] = client
 
-        self.create_timer(self.write_interval, self._write_status)
         self.create_timer(self.parameter_interval, self._query_oak_parameters)
+
+        # Lightweight state-machine timer; no high-rate subscriptions exist
+        # outside the finite sample window.
+        self.create_timer(0.5, self._scheduler_tick)
 
         self.get_logger().info(
             "Monitoring TurtleBots: " + ", ".join(str(r) for r in self.robots)
         )
         self.get_logger().info(f"Writing status to: {self.output_path}")
+        self.get_logger().info(
+            f"Snapshot interval: {self.write_interval:.1f}s; "
+            f"sensor sample window: {self.sample_window:.1f}s"
+        )
 
-        # Try immediately; services may not yet be discovered, so the periodic
-        # timer will retry without blocking startup.
         self._query_oak_parameters()
-        self._write_status()
+
+        # Produce the first useful snapshot quickly: sample now for one window.
+        now = time.monotonic()
+        self.next_write = now + self.sample_window
+        self._begin_sensor_sample(now)
 
     def _mark_seen(self, robot):
         self.state[robot]["last_seen_monotonic"] = time.monotonic()
         self.state[robot]["last_seen"] = utc_now_string()
-
-    def _rate_callback(self, robot, stream):
-        now = time.monotonic()
-        self._mark_seen(robot)
-        self.state[robot]["rates"][stream].tick(now)
 
     def _battery_callback(self, robot, msg):
         self._mark_seen(robot)
@@ -301,6 +271,85 @@ class FleetStatus(Node):
             "dock_visible": bool(msg.dock_visible),
         }
 
+    def _sample_callback(self, robot, stream):
+        now = time.monotonic()
+        self._mark_seen(robot)
+        self.state[robot]["sample_counters"][stream].tick(now)
+
+    def _begin_sensor_sample(self, now=None):
+        if self.sampling:
+            return
+
+        now = time.monotonic() if now is None else now
+
+        for robot in self.robots:
+            for counter in self.state[robot]["sample_counters"].values():
+                counter.clear()
+
+        for robot in self.robots:
+            ns = f"/robot{robot}"
+
+            self.sample_subscriptions.append(
+                self.create_subscription(
+                    LaserScan,
+                    f"{ns}/scan",
+                    lambda msg, r=robot: self._sample_callback(r, "scan"),
+                    self.sensor_qos,
+                )
+            )
+            self.sample_subscriptions.append(
+                self.create_subscription(
+                    CameraInfo,
+                    f"{ns}/oakd/rgb/preview/camera_info",
+                    lambda msg, r=robot: self._sample_callback(r, "rgb"),
+                    self.sensor_qos,
+                )
+            )
+            self.sample_subscriptions.append(
+                self.create_subscription(
+                    CameraInfo,
+                    f"{ns}/oakd/stereo/camera_info",
+                    lambda msg, r=robot: self._sample_callback(r, "depth"),
+                    self.sensor_qos,
+                )
+            )
+
+        self.sampling = True
+        self.sample_end = now + self.sample_window
+
+    def _finish_sensor_sample(self):
+        sampled_at = utc_now_string()
+
+        for robot in self.robots:
+            state = self.state[robot]
+            for stream, counter in state["sample_counters"].items():
+                state["sample_rates"][stream] = counter.rate()
+            state["sampled_at"] = sampled_at
+
+        for subscription in self.sample_subscriptions:
+            self.destroy_subscription(subscription)
+
+        self.sample_subscriptions.clear()
+        self.sampling = False
+        self.sample_end = None
+
+    def _scheduler_tick(self):
+        now = time.monotonic()
+
+        if self.sampling:
+            if now >= self.sample_end:
+                self._finish_sensor_sample()
+                self._write_status()
+                self.next_write = now + self.write_interval
+            return
+
+        # Begin the next sample so it ends at approximately next_write.
+        if self.next_write is None:
+            self.next_write = now + self.write_interval
+
+        if now >= self.next_write - self.sample_window:
+            self._begin_sensor_sample(now)
+
     def _query_oak_parameters(self):
         for robot in self.robots:
             state = self.state[robot]
@@ -326,11 +375,10 @@ class FleetStatus(Node):
 
         try:
             response = future.result()
-            params = {
+            state["oak_parameters"] = {
                 name: parameter_value_to_python(value)
                 for name, value in zip(OAK_PARAMETER_NAMES, response.values)
             }
-            state["oak_parameters"] = params
             state["oak_parameters_last_read"] = utc_now_string()
         except Exception as exc:
             self.get_logger().debug(
@@ -347,18 +395,17 @@ class FleetStatus(Node):
             age = None if last is None else max(0.0, now_mono - last)
             online = age is not None and age <= self.stale_seconds
 
-            scan_hz = state["rates"]["scan"].rate(now_mono)
-            odom_hz = state["rates"]["odom"].rate(now_mono)
-            rgb_hz = state["rates"]["rgb"].rate(now_mono)
-            depth_hz = state["rates"]["depth"].rate(now_mono)
+            scan_hz = state["sample_rates"]["scan"]
+            rgb_hz = state["sample_rates"]["rgb"]
+            depth_hz = state["sample_rates"]["depth"]
 
             params = state["oak_parameters"]
-            configured_pipeline = params.get("camera.i_pipeline_type")
+            configured_mode = params.get("camera.i_pipeline_type")
             configured_rgb_fps = params.get("rgb.i_fps")
             configured_depth_fps = expected_depth_fps(params)
 
-            rgb_active = rgb_hz is not None and rgb_hz > 0.0
-            depth_active = depth_hz is not None and depth_hz > 0.0
+            rgb_active = rgb_hz is not None and rgb_hz > 0
+            depth_active = depth_hz is not None and depth_hz > 0
 
             if rgb_active and depth_active:
                 observed_mode = "RGBD"
@@ -379,16 +426,13 @@ class FleetStatus(Node):
                 "battery": state["battery"],
                 "dock": state["dock"],
                 "lidar": {
-                    "active": scan_hz is not None and scan_hz > 0.0,
+                    "active": scan_hz is not None and scan_hz > 0,
                     "scan_hz": scan_hz,
-                },
-                "odometry": {
-                    "active": odom_hz is not None and odom_hz > 0.0,
-                    "odom_hz": odom_hz,
+                    "sampled_at": state["sampled_at"],
                 },
                 "camera": {
                     "active": rgb_active or depth_active,
-                    "configured_mode": configured_pipeline,
+                    "configured_mode": configured_mode,
                     "observed_mode": observed_mode,
                     "configured_rgb_fps": configured_rgb_fps,
                     "observed_rgb_fps": rgb_hz,
@@ -398,12 +442,15 @@ class FleetStatus(Node):
                     "depth_health": stream_health(configured_depth_fps, depth_hz),
                     "effective_parameters": params,
                     "parameters_last_read": state["oak_parameters_last_read"],
+                    "sampled_at": state["sampled_at"],
                 },
             })
 
         return {
-            "schema_version": 3,
+            "schema_version": 4,
             "generated_at": utc_now_string(),
+            "sample_window_seconds": self.sample_window,
+            "snapshot_interval_seconds": self.write_interval,
             "robots": robots,
         }
 
@@ -451,7 +498,7 @@ def robot_number(value):
 
 def parse_args(argv):
     parser = argparse.ArgumentParser(
-        description="Monitor JMU TurtleBot 4 fleet status."
+        description="Monitor JMU TurtleBot 4 fleet status with low CPU overhead."
     )
     parser.add_argument(
         "--robots",
@@ -469,9 +516,9 @@ def parse_args(argv):
     parser.add_argument(
         "--write-interval",
         type=positive_float,
-        default=5.0,
+        default=60.0,
         metavar="SECONDS",
-        help="seconds between JSON writes (default: 5)",
+        help="seconds between status snapshots (default: 60)",
     )
     parser.add_argument(
         "--stale-seconds",
@@ -482,33 +529,31 @@ def parse_args(argv):
              "(default: 15)",
     )
     parser.add_argument(
-        "--rate-window",
+        "--sample-window",
         type=positive_float,
         default=5.0,
         metavar="SECONDS",
-        help="rolling window used for FPS/Hz calculations (default: 5)",
-    )
-    parser.add_argument(
-        "--stream-inactive-seconds",
-        type=positive_float,
-        default=3.0,
-        metavar="SECONDS",
-        help="report a previously seen stream as 0 Hz after this many seconds "
-             "without messages (default: 3)",
+        help="seconds to subscribe to high-rate sensor streams before each "
+             "snapshot (default: 5)",
     )
     parser.add_argument(
         "--parameter-interval",
         type=positive_float,
-        default=30.0,
+        default=60.0,
         metavar="SECONDS",
-        help="seconds between OAK-D parameter reads (default: 30)",
+        help="seconds between OAK-D effective parameter reads (default: 60)",
     )
     parser.add_argument(
         "--stdout",
         action="store_true",
         help="also print each generated JSON document to stdout",
     )
-    return parser.parse_args(argv)
+    parsed = parser.parse_args(argv)
+
+    if parsed.sample_window >= parsed.write_interval:
+        parser.error("--sample-window must be less than --write-interval")
+
+    return parsed
 
 
 def main(args=None):
@@ -522,8 +567,7 @@ def main(args=None):
         output_path=parsed.output,
         write_interval=parsed.write_interval,
         stale_seconds=parsed.stale_seconds,
-        rate_window=parsed.rate_window,
-        stream_inactive_seconds=parsed.stream_inactive_seconds,
+        sample_window=parsed.sample_window,
         parameter_interval=parsed.parameter_interval,
         stdout=parsed.stdout,
     )
@@ -533,6 +577,8 @@ def main(args=None):
     except KeyboardInterrupt:
         pass
     finally:
+        if node.sampling:
+            node._finish_sensor_sample()
         node._write_status()
         node.destroy_node()
         rclpy.shutdown()
