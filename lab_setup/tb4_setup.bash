@@ -20,6 +20,12 @@ else
     SIM_NAMESPACE="/robotsim1"
 fi
 
+# ROS / DDS site defaults.  These may also be set in tb4_setup.conf
+# before this point if we later want to make them site-configurable.
+PHYSICAL_ROS_DOMAIN_ID="${PHYSICAL_ROS_DOMAIN_ID:-42}"
+SIM_ROS_DOMAIN_ID="${SIM_ROS_DOMAIN_ID:-43}"
+SIM_FASTDDS_PROFILE="${SIM_FASTDDS_PROFILE:-${_JMU_TB4_SETUP_DIR}/fastdds/localhost-128.xml}"
+
 # ROS environment: base -> JMU infrastructure -> student overlay
 if [ -r /opt/ros/jazzy/setup.bash ]; then
     source /opt/ros/jazzy/setup.bash
@@ -37,7 +43,6 @@ if [ -r "$HOME/rosdev/install/local_setup.bash" ]; then
     source "$HOME/rosdev/install/local_setup.bash"
 fi
 
-export ROS_DOMAIN_ID=42
 export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
 
 _JMU_TB4_CONFIG_DIR="$HOME/.config/jmu_tb4"
@@ -114,11 +119,17 @@ _jmu_tb4_discovery_server_for()
 }
 
 # Safe, unselected state: do not perform subnet-wide discovery.
+# Keep the physical-fleet domain as the neutral default, but do not
+# configure a discovery server until a robot is explicitly selected.
 _jmu_tb4_clear()
 {
+    export ROS_DOMAIN_ID="$PHYSICAL_ROS_DOMAIN_ID"
     unset ROBOT_NAMESPACE
     unset ROS_DISCOVERY_SERVER
     unset ROS_SUPER_CLIENT
+    unset ROS_STATIC_PEERS
+    unset FASTRTPS_DEFAULT_PROFILES_FILE
+    unset FASTDDS_DEFAULT_PROFILES_FILE
     export ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
 }
 
@@ -129,10 +140,27 @@ _jmu_tb4_apply()
     local discovery_server
 
     if [[ "$selection" =~ ^[Ss]$ ]]; then
+        if [ ! -r "$SIM_FASTDDS_PROFILE" ]; then
+            echo "ERROR: Simulator Fast DDS profile is not readable:" >&2
+            echo "       $SIM_FASTDDS_PROFILE" >&2
+            return 1
+        fi
+
+        export ROS_DOMAIN_ID="$SIM_ROS_DOMAIN_ID"
         export ROBOT_NAMESPACE="$SIM_NAMESPACE"
+
+        # Simulator DDS discovery is intentionally restricted to this host.
+        # SYSTEM_DEFAULT prevents rmw_fastrtps from installing the Jazzy
+        # LOCALHOST configuration with its hard-coded 32-peer range.
         unset ROS_DISCOVERY_SERVER
         unset ROS_SUPER_CLIENT
-        export ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
+        unset ROS_STATIC_PEERS
+        export ROS_AUTOMATIC_DISCOVERY_RANGE=SYSTEM_DEFAULT
+        export FASTRTPS_DEFAULT_PROFILES_FILE="$SIM_FASTDDS_PROFILE"
+
+        # Fast DDS 2.14 uses FASTRTPS_DEFAULT_PROFILES_FILE.  Clear the
+        # newer variable as a precaution against a conflicting environment.
+        unset FASTDDS_DEFAULT_PROFILES_FILE
         return 0
     fi
 
@@ -142,7 +170,11 @@ _jmu_tb4_apply()
         fi
 
         # Fleet mode intentionally has no single robot namespace.
+        export ROS_DOMAIN_ID="$PHYSICAL_ROS_DOMAIN_ID"
         unset ROBOT_NAMESPACE
+        unset ROS_STATIC_PEERS
+        unset FASTRTPS_DEFAULT_PROFILES_FILE
+        unset FASTDDS_DEFAULT_PROFILES_FILE
         export ROS_DISCOVERY_SERVER="$discovery_server"
         export ROS_SUPER_CLIENT=TRUE
         unset ROS_AUTOMATIC_DISCOVERY_RANGE
@@ -154,7 +186,11 @@ _jmu_tb4_apply()
             return 1
         fi
 
+        export ROS_DOMAIN_ID="$PHYSICAL_ROS_DOMAIN_ID"
         export ROBOT_NAMESPACE="/robot${selection}"
+        unset ROS_STATIC_PEERS
+        unset FASTRTPS_DEFAULT_PROFILES_FILE
+        unset FASTDDS_DEFAULT_PROFILES_FILE
         export ROS_DISCOVERY_SERVER="$discovery_server"
         export ROS_SUPER_CLIENT=TRUE
         unset ROS_AUTOMATIC_DISCOVERY_RANGE
@@ -173,9 +209,6 @@ _jmu_tb4_print_status()
     echo "JMU CS354 TurtleBot Environment"
     echo
     echo "  ROS domain:  ${ROS_DOMAIN_ID:-<unset>}"
-    if [ "${ROS_DOMAIN_ID:-}" != "42" ]; then
-        echo "  WARNING: expected ROS_DOMAIN_ID=42"
-    fi
     echo
 
     if [ ! -r "$_JMU_TB4_SELECTION_FILE" ]; then
@@ -198,12 +231,21 @@ _jmu_tb4_print_status()
     if [[ "$selection" =~ ^[Ss]$ ]]; then
         echo "  Mode:       Simulator"
         echo "  Namespace:  $ROBOT_NAMESPACE"
+        echo "  Discovery:  localhost-only Fast DDS profile"
+        echo "  DDS profile: ${FASTRTPS_DEFAULT_PROFILES_FILE:-<unset>}"
+        if [ "${ROS_DOMAIN_ID:-}" != "$SIM_ROS_DOMAIN_ID" ]; then
+            echo "  WARNING: expected simulator ROS_DOMAIN_ID=$SIM_ROS_DOMAIN_ID"
+        fi
         echo
         echo "Run 'tb4-select' to change environments."
     elif [ "$selection" = "ALL" ]; then
         echo "  Mode:       Fleet / all robots"
         echo "  Robots:     ${PHYSICAL_ROBOTS[*]}"
         echo "  Namespace:  <none; multi-robot mode>"
+        echo "  Discovery:  Fast DDS discovery servers"
+        if [ "${ROS_DOMAIN_ID:-}" != "$PHYSICAL_ROS_DOMAIN_ID" ]; then
+            echo "  WARNING: expected physical ROS_DOMAIN_ID=$PHYSICAL_ROS_DOMAIN_ID"
+        fi
         echo
         echo "Run 'tb4-select' to change environments."
     elif _jmu_tb4_is_physical_robot "$selection"; then
@@ -211,6 +253,10 @@ _jmu_tb4_print_status()
         echo "  Robot:      $selection"
         echo "  Host:       tb${selection}.cs.jmu.edu"
         echo "  Namespace:  $ROBOT_NAMESPACE"
+        echo "  Discovery:  Fast DDS discovery server"
+        if [ "${ROS_DOMAIN_ID:-}" != "$PHYSICAL_ROS_DOMAIN_ID" ]; then
+            echo "  WARNING: expected physical ROS_DOMAIN_ID=$PHYSICAL_ROS_DOMAIN_ID"
+        fi
         echo
         echo "Run 'tb4-select' to change environments."
     else
@@ -242,9 +288,11 @@ _jmu_tb4_commit_selection()
 {
     local selection="$1"
 
-    # Stop the ROS CLI daemon while this shell still has the OLD discovery
-    # environment, avoiding a daemon that retains stale discovery settings.
-    ros2 daemon stop >/dev/null 2>&1 || true
+    # Simulator and physical-robot modes use different ROS domains.
+    # Stop any ROS CLI daemon for either domain so a later ros2 command
+    # cannot reconnect to a daemon retaining stale discovery settings.
+    ROS_DOMAIN_ID="$PHYSICAL_ROS_DOMAIN_ID" ros2 daemon stop >/dev/null 2>&1 || true
+    ROS_DOMAIN_ID="$SIM_ROS_DOMAIN_ID" ros2 daemon stop >/dev/null 2>&1 || true
 
     mkdir -p "$_JMU_TB4_CONFIG_DIR"
     printf '%s\n' "$selection" > "$_JMU_TB4_SELECTION_FILE"

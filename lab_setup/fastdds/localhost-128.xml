@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+
+    <transport_descriptors>
+
+        <!--
+          Shared-memory transport for high-bandwidth communication between
+          ROS 2 processes on this workstation.
+        -->
+        <transport_descriptor>
+            <transport_id>jmu_local_shm</transport_id>
+            <type>SHM</type>
+        </transport_descriptor>
+
+        <!--
+          UDP transport used for localhost participant discovery.
+
+          ROS 2 Jazzy's rmw_fastrtps LOCALHOST mode uses a hard-coded
+          maxInitialPeersRange of 32.  The TurtleBot 4 simulator can exceed
+          that number of DDS participants, so this profile raises the range
+          to 128 while restricting UDP to loopback.
+        -->
+        <transport_descriptor>
+            <transport_id>jmu_local_udp</transport_id>
+            <type>UDPv4</type>
+
+            <maxInitialPeersRange>128</maxInitialPeersRange>
+
+            <interfaces>
+                <allowlist>
+                    <interface name="127.0.0.1"
+                               netmask_filter="OFF"/>
+                </allowlist>
+            </interfaces>
+        </transport_descriptor>
+
+    </transport_descriptors>
+
+    <participant
+        profile_name="jmu_localhost_128"
+        is_default_profile="true">
+
+        <rtps>
+
+            <!-- Use only the transports defined above. -->
+            <useBuiltinTransports>false</useBuiltinTransports>
+
+            <userTransports>
+                <transport_id>jmu_local_shm</transport_id>
+                <transport_id>jmu_local_udp</transport_id>
+            </userTransports>
+
+            <builtin>
+
+                <!--
+                  Listen for DDS discovery traffic only on loopback.
+                  Defining a custom metatraffic unicast locator also avoids
+                  Fast DDS creating its normal multicast discovery locator.
+                -->
+                <metatrafficUnicastLocatorList>
+                    <locator>
+                        <udpv4>
+                            <address>127.0.0.1</address>
+                            <port>0</port>
+                        </udpv4>
+                    </locator>
+                </metatrafficUnicastLocatorList>
+
+                <!--
+                  Probe localhost participant IDs using the transport's
+                  maxInitialPeersRange (128).
+                -->
+                <initialPeersList>
+                    <locator>
+                        <udpv4>
+                            <address>127.0.0.1</address>
+                            <port>0</port>
+                        </udpv4>
+                    </locator>
+                </initialPeersList>
+
+            </builtin>
+
+        </rtps>
+
+    </participant>
+
+</profiles>

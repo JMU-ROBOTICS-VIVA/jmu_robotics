@@ -9,6 +9,7 @@ INSTALL_ROOT="/opt/jmu/cs354"
 ROS_INSTALL="${INSTALL_ROOT}/ros"
 SHELL_INSTALL="${INSTALL_ROOT}/tb4_setup.bash"
 CONFIG_INSTALL="${INSTALL_ROOT}/tb4_setup.conf"
+FASTDDS_INSTALL="${INSTALL_ROOT}/fastdds/localhost-128.xml"
 BASHRC="/etc/bash.bashrc"
 HOOK_BEGIN="# >>> JMU CS354 TurtleBot environment >>>"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -16,19 +17,17 @@ REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 ROS_SOURCE="${REPO_ROOT}/ros"
 TB4_SETUP_SOURCE="${SCRIPT_DIR}/tb4_setup.bash"
 TB4_CONFIG_SOURCE="${SCRIPT_DIR}/tb4_setup.conf"
+FASTDDS_SOURCE="${SCRIPT_DIR}/fastdds/localhost-128.xml"
 
-# at JMU, ansible wants to run as root, so
-# this part is commented out
-
-#if [ "$EUID" -eq 0 ]; then
-#    echo
-#    echo "Do NOT run this script with sudo."
-#    echo "Run it as your normal administrative account:"
-#    echo
-#    echo "    ./lab_setup/install.sh"
-#    echo
-#    exit 1
-#fi
+if [ "$EUID" -eq 0 ]; then
+    echo
+    echo "Do NOT run this script with sudo."
+    echo "Run it as your normal administrative account:"
+    echo
+    echo "    ./lab_setup/install.sh"
+    echo
+    exit 1
+fi
 
 if [ ! -r /opt/ros/jazzy/setup.bash ]; then
     echo "ERROR: ROS 2 Jazzy was not found under /opt/ros/jazzy."
@@ -53,6 +52,12 @@ if [ ! -r "$TB4_CONFIG_SOURCE" ]; then
     exit 1
 fi
 
+if [ ! -r "$FASTDDS_SOURCE" ]; then
+    echo "ERROR: Fast DDS simulator profile not found:"
+    echo "       $FASTDDS_SOURCE"
+    exit 1
+fi
+
 if ! command -v colcon >/dev/null 2>&1; then
     echo "ERROR: colcon was not found."
     exit 1
@@ -74,6 +79,9 @@ echo "    $SHELL_INSTALL"
 echo
 echo "Site configuration:"
 echo "    $CONFIG_INSTALL"
+echo
+echo "Fast DDS simulator profile:"
+echo "    $FASTDDS_INSTALL"
 echo
 
 sudo -v
@@ -126,6 +134,14 @@ sudo install \
     "$TB4_CONFIG_SOURCE" \
     "$CONFIG_INSTALL"
 
+sudo install \
+    -D \
+    -o root \
+    -g root \
+    -m 0644 \
+    "$FASTDDS_SOURCE" \
+    "$FASTDDS_INSTALL"
+
 # Preserve the original file once, then add an idempotent hook.
 if [ ! -e "${BASHRC}.pre-jmu-cs354" ]; then
     sudo cp -a "$BASHRC" "${BASHRC}.pre-jmu-cs354"
@@ -156,6 +172,9 @@ echo "    $SHELL_INSTALL"
 echo
 echo "Installed site configuration:"
 echo "    $CONFIG_INSTALL"
+echo
+echo "Installed Fast DDS simulator profile:"
+echo "    $FASTDDS_INSTALL"
 echo
 echo "Open a NEW terminal to test the installation."
 echo
