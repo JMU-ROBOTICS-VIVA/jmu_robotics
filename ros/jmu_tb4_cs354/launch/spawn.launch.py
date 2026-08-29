@@ -56,6 +56,10 @@ ARGUMENTS = [
                           description='Whether to launch Nav2'),
     DeclareLaunchArgument( 'world', default_value='warehouse',
                           description='Gazebo world name'),
+    DeclareLaunchArgument('lidar_rate', default_value='8.0',
+                          description='Simulated RPLIDAR update rate in Hz'),
+    DeclareLaunchArgument('camera_rate', default_value='10.0',
+                          description='Simulated RGBD camera update rate in Hz'),
 ]
 for pose_element in ['x', 'y', 'z', 'yaw']:
     ARGUMENTS.append(DeclareLaunchArgument(pose_element, default_value='0.0',
@@ -78,7 +82,7 @@ def generate_launch_description():
 
     # Paths
     turtlebot4_ros_gz_bridge_launch = PathJoinSubstitution(
-        [pkg_turtlebot4_gz_bringup, 'launch', 'ros_gz_bridge.launch.py'])
+        [pkg_jmu_tb4, 'launch', 'ros_gz_bridge_sim.launch.py'])
     rviz_launch = PathJoinSubstitution(
         [pkg_jmu_tb4, 'launch', 'rviz.launch.py'])
     turtlebot4_node_launch = PathJoinSubstitution(
@@ -88,7 +92,7 @@ def generate_launch_description():
     create3_gz_nodes_launch = PathJoinSubstitution(
         [pkg_irobot_create_gz_bringup, 'launch', 'create3_gz_nodes.launch.py'])
     robot_description_launch = PathJoinSubstitution(
-        [pkg_turtlebot4_description, 'launch', 'robot_description.launch.py'])
+        [pkg_jmu_tb4, 'launch', 'robot_description_sim.launch.py'])
     dock_description_launch = PathJoinSubstitution(
         [pkg_irobot_create_common_bringup, 'launch', 'dock_description.launch.py'])
     localization_launch = PathJoinSubstitution(
@@ -141,8 +145,13 @@ def generate_launch_description():
         # Robot description
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource([robot_description_launch]),
-            launch_arguments=[('model', LaunchConfiguration('model')),
-                              ('use_sim_time', LaunchConfiguration('use_sim_time'))]
+            launch_arguments=[
+                ('model', LaunchConfiguration('model')),
+                ('use_sim_time', LaunchConfiguration('use_sim_time')),
+                ('namespace', namespace),
+                ('lidar_rate', LaunchConfiguration('lidar_rate')),
+                ('camera_rate', LaunchConfiguration('camera_rate')),
+            ]
         ),
 
         # Dock description
