@@ -19,7 +19,7 @@ from ament_index_python.packages import get_package_share_directory
 from irobot_create_common_bringup.namespace import GetNamespacedName
 from irobot_create_common_bringup.offset import OffsetParser, RotationalOffsetX, RotationalOffsetY
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, GroupAction, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, GroupAction, IncludeLaunchDescription, TimerAction
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import (
@@ -60,6 +60,8 @@ ARGUMENTS = [
                           description='Simulated RPLIDAR update rate in Hz'),
     DeclareLaunchArgument('camera_rate', default_value='10.0',
                           description='Simulated RGBD camera update rate in Hz'),
+    DeclareLaunchArgument('rviz_delay', default_value='8.0',
+                          description='Delay before starting RViz, in seconds'),
 ]
 for pose_element in ['x', 'y', 'z', 'yaw']:
     ARGUMENTS.append(DeclareLaunchArgument(pose_element, default_value='0.0',
@@ -298,6 +300,14 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration('rviz')),
     )
 
+    # Delay RViz slightly so Gazebo and the simulated sensors have time to
+    # initialize before RViz begins subscribing.  This also avoids competing
+    # with Gazebo for CPU/GPU resources during the heaviest part of startup.
+    delayed_rviz = TimerAction(
+        period=LaunchConfiguration('rviz_delay'),
+        actions=[rviz],
+    )
+
     # Define LaunchDescription variable
     ld = LaunchDescription(ARGUMENTS)
     ld.add_action(param_file_cmd)
@@ -306,6 +316,6 @@ def generate_launch_description():
     ld.add_action(localization)
     ld.add_action(slam)
     ld.add_action(nav2)
-    ld.add_action(rviz)
+    ld.add_action(delayed_rviz)
 
     return ld

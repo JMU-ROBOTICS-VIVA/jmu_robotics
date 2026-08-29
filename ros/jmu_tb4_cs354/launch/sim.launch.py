@@ -1,26 +1,58 @@
-import os
+# Copyright 2023 Clearpath Robotics, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Based on turtlebot4_gz_bringup/launch/sim.launch.py.
+# Modified for JMU CS354 to support a full world path, an optional additional
+# resource path, and GUI / server-only operation.
 
+import os
 from pathlib import Path
 
 from ament_index_python.packages import get_package_share_directory
 
 from launch import LaunchDescription
-from launch.actions import (
-    DeclareLaunchArgument,
-    IncludeLaunchDescription,
-    SetEnvironmentVariable,
-)
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, SetEnvironmentVariable
+from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import (
-    EnvironmentVariable,
-    LaunchConfiguration,
-    PathJoinSubstitution,
-)
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 
 
-def generate_launch_description():
+ARGUMENTS = [
+    DeclareLaunchArgument(
+        'use_sim_time', default_value='true',
+        choices=['true', 'false'],
+        description='Use simulation time'),
+    DeclareLaunchArgument(
+        'world',
+        description='Full path to the Gazebo SDF world file'),
+    DeclareLaunchArgument(
+        'resource_path', default_value='',
+        description='Additional Gazebo resource path'),
+    DeclareLaunchArgument(
+        'model', default_value='lite',
+        choices=['standard', 'lite'],
+        description='TurtleBot 4 model'),
+    DeclareLaunchArgument(
+        'gazebo_gui', default_value='true',
+        choices=['true', 'false'],
+        description='Launch the Gazebo graphical client'),
+]
 
+
+def generate_launch_description():
+    # Directories
     pkg_turtlebot4_gz_bringup = get_package_share_directory(
         'turtlebot4_gz_bringup')
     pkg_turtlebot4_gz_gui_plugins = get_package_share_directory(
@@ -35,48 +67,21 @@ def generate_launch_description():
         'irobot_create_gz_plugins')
     pkg_ros_gz_sim = get_package_share_directory('ros_gz_sim')
 
-    default_world = PathJoinSubstitution([
-        pkg_turtlebot4_gz_bringup,
-        'worlds',
-        'warehouse.sdf'
+    # Preserve the stock TurtleBot / Create 3 Gazebo search paths and append
+    # an optional JMU-specific resource path supplied by the caller.
+    standard_resource_path = ':'.join([
+        os.path.join(pkg_turtlebot4_gz_bringup, 'worlds'),
+        os.path.join(pkg_irobot_create_gz_bringup, 'worlds'),
+        str(Path(pkg_turtlebot4_description).parent.resolve()),
+        str(Path(pkg_irobot_create_description).parent.resolve()),
     ])
 
-    world_arg = DeclareLaunchArgument(
-        'world',
-        default_value=default_world,
-        description='Full path to Gazebo SDF world file'
-    )
-
-    model_arg = DeclareLaunchArgument(
-        'model',
-        default_value='lite',
-        choices=['standard', 'lite'],
-        description='TurtleBot 4 model'
-    )
-
-    resource_path_arg = DeclareLaunchArgument(
-        'resource_path',
-        default_value='',
-        description='Additional Gazebo resource/model search path'
-    )
-
-    # Keep the standard TurtleBot/Create3 resources, but also permit
-    # a project package to supply its own models/resources.
     gz_resource_path = SetEnvironmentVariable(
         name='GZ_SIM_RESOURCE_PATH',
         value=[
+            standard_resource_path,
+            ':',
             LaunchConfiguration('resource_path'),
-            os.pathsep,
-            os.path.join(pkg_turtlebot4_gz_bringup, 'worlds'),
-            os.pathsep,
-            os.path.join(pkg_irobot_create_gz_bringup, 'worlds'),
-            os.pathsep,
-            str(Path(pkg_turtlebot4_description).parent.resolve()),
-            os.pathsep,
-            str(Path(pkg_irobot_create_description).parent.resolve()),
-            os.pathsep,
-            EnvironmentVariable('GZ_SIM_RESOURCE_PATH',
-                                default_value='')
         ]
     )
 
@@ -84,34 +89,56 @@ def generate_launch_description():
         name='GZ_GUI_PLUGIN_PATH',
         value=':'.join([
             os.path.join(pkg_turtlebot4_gz_gui_plugins, 'lib'),
-            os.path.join(pkg_irobot_create_gz_plugins, 'lib')
+            os.path.join(pkg_irobot_create_gz_plugins, 'lib'),
         ])
     )
 
     gz_sim_launch = PathJoinSubstitution([
         pkg_ros_gz_sim,
         'launch',
-        'gz_sim.launch.py'
+        'gz_sim.launch.py',
     ])
 
-    gazebo = IncludeLaunchDescription(
+    gui_config = PathJoinSubstitution([
+        pkg_turtlebot4_gz_bringup,
+        'gui',
+        LaunchConfiguration('model'),
+        'gui.config',
+    ])
+
+    # Normal classroom mode: run both the Gazebo server and graphical client.
+    gazebo_with_gui = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([gz_sim_launch]),
-        launch_arguments=[
-            ('gz_args', [
+        launch_arguments={
+            'gz_args': [
                 LaunchConfiguration('world'),
                 ' -r',
                 ' -v 4',
                 ' --gui-config ',
-                PathJoinSubstitution([
-                    pkg_turtlebot4_gz_bringup,
-                    'gui',
-                    LaunchConfiguration('model'),
-                    'gui.config'
-                ])
-            ])
-        ]
+                gui_config,
+            ],
+            'on_exit_shutdown': 'true',
+        }.items(),
+        condition=IfCondition(LaunchConfiguration('gazebo_gui')),
     )
 
+    # Battery / CPU friendly mode: run only the Gazebo server.  RViz can still
+    # be launched independently by spawn.launch.py.
+    gazebo_server_only = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource([gz_sim_launch]),
+        launch_arguments={
+            'gz_args': [
+                LaunchConfiguration('world'),
+                ' -r',
+                ' -s',
+                ' -v 4',
+            ],
+            'on_exit_shutdown': 'true',
+        }.items(),
+        condition=UnlessCondition(LaunchConfiguration('gazebo_gui')),
+    )
+
+    # Clock bridge
     clock_bridge = Node(
         package='ros_gz_bridge',
         executable='parameter_bridge',
@@ -119,16 +146,13 @@ def generate_launch_description():
         output='screen',
         arguments=[
             '/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock'
-        ]
+        ],
     )
 
-    return LaunchDescription([
-        world_arg,
-        model_arg,
-        resource_path_arg,
-        gz_resource_path,
-        gz_gui_plugin_path,
-        gazebo,
-        clock_bridge,
-    ])
-
+    ld = LaunchDescription(ARGUMENTS)
+    ld.add_action(gz_resource_path)
+    ld.add_action(gz_gui_plugin_path)
+    ld.add_action(gazebo_with_gui)
+    ld.add_action(gazebo_server_only)
+    ld.add_action(clock_bridge)
+    return ld

@@ -100,6 +100,17 @@ def generate_launch_description():
             description='Launch RViz'
         ),
         DeclareLaunchArgument(
+            'rviz_delay',
+            default_value='5.0',
+            description='Delay before starting RViz, in seconds'
+        ),
+        DeclareLaunchArgument(
+            'gazebo_gui',
+            default_value='true',
+            choices=['true', 'false'],
+            description='Launch the Gazebo graphical client'
+        ),
+        DeclareLaunchArgument(
             'map',
             default_value=default_map,
             description='Map YAML file used for localization'
@@ -123,6 +134,7 @@ def generate_launch_description():
             'resource_path': LaunchConfiguration('resource_path'),
             'model': LaunchConfiguration('model'),
             'use_sim_time': LaunchConfiguration('use_sim_time'),
+            'gazebo_gui': LaunchConfiguration('gazebo_gui'),
         }.items()
     )
 
@@ -142,6 +154,7 @@ def generate_launch_description():
             'slam': LaunchConfiguration('slam'),
             'nav2': LaunchConfiguration('nav2'),
             'rviz': LaunchConfiguration('rviz'),
+            'rviz_delay': LaunchConfiguration('rviz_delay'),
             'use_sim_time': LaunchConfiguration('use_sim_time'),
         }.items()
     )
