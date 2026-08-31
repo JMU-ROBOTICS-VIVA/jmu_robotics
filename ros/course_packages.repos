@@ -1,0 +1,11 @@
+repositories:
+  rocketbot:
+    type: git
+    url: https://github.com/JMU-ROBOTICS-VIVA/rocketbot.git
+    version: main
+
+  jmu_ros2_util:
+    type: git
+    url: https://github.com/JMU-ROBOTICS-VIVA/jmu_ros2_util.git
+    version: main
+
