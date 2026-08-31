@@ -7,16 +7,22 @@ set -euo pipefail
 
 INSTALL_ROOT="/opt/jmu/cs354"
 ROS_INSTALL="${INSTALL_ROOT}/ros"
+BIN_INSTALL="${INSTALL_ROOT}/bin"
 SHELL_INSTALL="${INSTALL_ROOT}/tb4_setup.bash"
 CONFIG_INSTALL="${INSTALL_ROOT}/tb4_setup.conf"
+GITHUB_LOGIN_INSTALL="${BIN_INSTALL}/jmu-github-login"
 FASTDDS_INSTALL="${INSTALL_ROOT}/fastdds/localhost-128.xml"
+
 BASHRC="/etc/bash.bashrc"
+
 HOOK_BEGIN="# >>> JMU CS354 TurtleBot environment >>>"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 ROS_SOURCE="${REPO_ROOT}/ros"
+ROS_REPOS="${ROS_SOURCE}/course_packages.repos"
 TB4_SETUP_SOURCE="${SCRIPT_DIR}/tb4_setup.bash"
 TB4_CONFIG_SOURCE="${SCRIPT_DIR}/tb4_setup.conf"
+GITHUB_LOGIN_SOURCE="${SCRIPT_DIR}/jmu-github-login"
 FASTDDS_SOURCE="${SCRIPT_DIR}/fastdds/localhost-128.xml"
 
 if [ "$EUID" -eq 0 ]; then
@@ -46,6 +52,12 @@ if [ ! -r "$TB4_SETUP_SOURCE" ]; then
     exit 1
 fi
 
+if [ ! -r "$GITHUB_LOGIN_SOURCE" ]; then
+    echo "ERROR: GitHub login script script not found:"
+    echo "       $GITHUB_LOGIN_SOURCE"
+    exit 1
+fi
+
 if [ ! -r "$TB4_CONFIG_SOURCE" ]; then
     echo "ERROR: TurtleBot site configuration not found:"
     echo "       $TB4_CONFIG_SOURCE"
@@ -60,6 +72,14 @@ fi
 
 if ! command -v colcon >/dev/null 2>&1; then
     echo "ERROR: colcon was not found."
+    exit 1
+fi
+
+if ! command -v vcs >/dev/null 2>&1; then
+    echo "ERROR: vcs was not found."
+    echo "Install it with:"
+    echo
+    echo "    sudo apt install python3-vcstool"
     exit 1
 fi
 
@@ -100,6 +120,13 @@ cleanup()
 }
 trap cleanup EXIT
 
+EXTERNAL_ROS_SOURCE="${WORK_DIR}/external_src"
+mkdir -p "$EXTERNAL_ROS_SOURCE"
+
+echo "Fetching external ROS packages..."
+
+vcs import "$EXTERNAL_ROS_SOURCE" < "$ROS_REPOS"
+
 # This prefix is dedicated to this course infrastructure, so rebuild it
 # from scratch to avoid stale files after renames/deletions.
 sudo rm -rf "$ROS_INSTALL"
@@ -110,7 +137,7 @@ echo "Building JMU ROS packages..."
 colcon \
     --log-base "$WORK_DIR/log" \
     build \
-    --base-paths "$ROS_SOURCE" \
+    --base-paths "$ROS_SOURCE" "${EXTERNAL_ROS_SOURCE}" \
     --build-base "$WORK_DIR/build" \
     --install-base "$ROS_INSTALL"
 
@@ -141,6 +168,14 @@ sudo install \
     -m 0644 \
     "$FASTDDS_SOURCE" \
     "$FASTDDS_INSTALL"
+
+sudo install \
+    -D \
+    -o root \
+    -g root \
+    -m 0755 \
+    "$GITHUB_LOGIN_SOURCE" \
+    "$GITHUB_LOGIN_INSTALL"
 
 # Preserve the original file once, then add an idempotent hook.
 if [ ! -e "${BASHRC}.pre-jmu-cs354" ]; then
@@ -175,6 +210,9 @@ echo "    $CONFIG_INSTALL"
 echo
 echo "Installed Fast DDS simulator profile:"
 echo "    $FASTDDS_INSTALL"
+echo
+echo "Installed GitHub login command:"
+echo "    $GITHUB_LOGIN_INSTALL"
 echo
 echo "Open a NEW terminal to test the installation."
 echo
