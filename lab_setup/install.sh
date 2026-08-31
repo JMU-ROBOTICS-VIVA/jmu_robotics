@@ -22,18 +22,19 @@ ROS_SOURCE="${REPO_ROOT}/ros"
 ROS_REPOS="${ROS_SOURCE}/course_packages.repos"
 TB4_SETUP_SOURCE="${SCRIPT_DIR}/tb4_setup.bash"
 TB4_CONFIG_SOURCE="${SCRIPT_DIR}/tb4_setup.conf"
-GITHUB_LOGIN_SOURCE="${SCRIPT_DIR}/jmu-github-login"
+GITHUB_LOGIN_SOURCE="${SCRIPT_DIR}/jmu-github-login.sh"
 FASTDDS_SOURCE="${SCRIPT_DIR}/fastdds/localhost-128.xml"
 
-if [ "$EUID" -eq 0 ]; then
-    echo
-    echo "Do NOT run this script with sudo."
-    echo "Run it as your normal administrative account:"
-    echo
-    echo "    ./lab_setup/install.sh"
-    echo
-    exit 1
-fi
+# jmu install runs as root, so, we remove this for now
+#if [ "$EUID" -eq 0 ]; then
+#    echo
+#    echo "Do NOT run this script with sudo."
+#    echo "Run it as your normal administrative account:"
+#    echo
+#    echo "    ./lab_setup/install.sh"
+#    echo
+#    exit 1
+#fi
 
 if [ ! -r /opt/ros/jazzy/setup.bash ]; then
     echo "ERROR: ROS 2 Jazzy was not found under /opt/ros/jazzy."
