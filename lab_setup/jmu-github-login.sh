@@ -16,10 +16,11 @@ fi
 echo "Logging in to GitHub..."
 echo
 
-gh auth login \
+# remove kerberos warnings by unsetting this env var for
+# just this process
+env -u KRB5CCNAME gh auth login \
     --hostname github.com \
     --git-protocol https \
-    --web
 
 # Configure Git to use the GitHub CLI for HTTPS authentication.
 gh auth setup-git --hostname github.com
