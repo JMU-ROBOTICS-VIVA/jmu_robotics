@@ -27,8 +27,9 @@ if [[ ! -d "${WORKSPACE}" ]]; then
     exit 1
 fi
 
-# shellcheck disable=SC1090
+set +u
 source "${ROS_SETUP}"
+set -u
 
 cd "${WORKSPACE}"
 
