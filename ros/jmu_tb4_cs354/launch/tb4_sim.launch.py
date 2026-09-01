@@ -1,3 +1,5 @@
+import os
+
 from ament_index_python.packages import get_package_share_directory
 
 from launch import LaunchDescription
@@ -6,7 +8,29 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import EnvironmentVariable, LaunchConfiguration, PathJoinSubstitution
 
 
+def check_ros_domain_id():
+    expected_domain = '0'
+
+    # ROS 2 uses domain 0 when ROS_DOMAIN_ID is not set.
+    actual_domain = os.environ.get('ROS_DOMAIN_ID', '0')
+
+    if actual_domain != expected_domain:
+        raise RuntimeError(
+            '\n\n'
+            '============================================================\n'
+            'JMU TurtleBot 4 simulator configuration error\n'
+            '============================================================\n'
+            f'ROS_DOMAIN_ID is {actual_domain}, but the simulator requires '
+            f'ROS_DOMAIN_ID={expected_domain}.\n\n'
+            'Run tb4-select and select the simulator, or set:\n\n'
+            '    export ROS_DOMAIN_ID=0\n\n'
+            'Then launch the simulator again.\n'
+            '============================================================\n'
+        )
+
 def generate_launch_description():
+    check_ros_domain_id()
+
     # Package directories
     pkg_jmu_tb4 = get_package_share_directory('jmu_tb4_cs354')
     pkg_tb4_gz = get_package_share_directory('turtlebot4_gz_bringup')

@@ -1,9 +1,5 @@
 cmake_minimum_required(VERSION 3.8)
-project(jmu_tb4_bringup)
-
-if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-  add_compile_options(-Wall -Wextra -Wpedantic)
-endif()
+project(jmu_tb4_bringup NONE)
 
 # find dependencies
 find_package(ament_cmake REQUIRED)
@@ -24,8 +20,15 @@ if(BUILD_TESTING)
 endif()
 
 install(
-  DIRECTORY config
+  DIRECTORY config launch
   DESTINATION share/${PROJECT_NAME}
+)
+
+install(
+  PROGRAMS
+    scripts/lidar_power.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME lidar_power
 )
 
 ament_package()
