@@ -9,7 +9,7 @@ from launch.substitutions import EnvironmentVariable, LaunchConfiguration, PathJ
 
 
 def check_ros_domain_id():
-    expected_domain = '0'
+    expected_domain = '43'
 
     # ROS 2 uses domain 0 when ROS_DOMAIN_ID is not set.
     actual_domain = os.environ.get('ROS_DOMAIN_ID', '0')
@@ -22,8 +22,7 @@ def check_ros_domain_id():
             '============================================================\n'
             f'ROS_DOMAIN_ID is {actual_domain}, but the simulator requires '
             f'ROS_DOMAIN_ID={expected_domain}.\n\n'
-            'Run tb4-select and select the simulator, or set:\n\n'
-            '    export ROS_DOMAIN_ID=0\n\n'
+            'Run tb4-select and select the simulator.\n'
             'Then launch the simulator again.\n'
             '============================================================\n'
         )
