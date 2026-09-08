@@ -48,6 +48,9 @@ fi
 
 export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
 
+# Use human-readable timestamps in ROS 2 console logging.
+export RCUTILS_CONSOLE_OUTPUT_FORMAT="[{severity}] [{date_time_with_ms}] [{name}]: {message}"
+
 _JMU_TB4_CONFIG_DIR="$HOME/.config/jmu_tb4"
 _JMU_TB4_SELECTION_FILE="$_JMU_TB4_CONFIG_DIR/selection"
 
