@@ -11,7 +11,7 @@ BIN_INSTALL="${INSTALL_ROOT}/bin"
 SHELL_INSTALL="${INSTALL_ROOT}/tb4_setup.bash"
 CONFIG_INSTALL="${INSTALL_ROOT}/tb4_setup.conf"
 FASTDDS_INSTALL="${INSTALL_ROOT}/fastdds/localhost-128.xml"
-GITHUB_LOGIN_INSTALL="${BIN_INSTALL}/jmu-github-login"
+GITHUB_LOGIN_INSTALL="${BIN_INSTALL}/jmu-github-login.sh"
 DIAGNOSTIC_INSTALL="${BIN_INSTALL}/ros_tb4_diagnostic.sh"
 CLEANUP_INSTALL="${BIN_INSTALL}/ros_tb4_cleanup.sh"
 BASHRC="/etc/bash.bashrc"
@@ -27,15 +27,15 @@ GITHUB_LOGIN_SOURCE="${SCRIPT_DIR}/jmu-github-login"
 DIAGNOSTIC_SOURCE="${SCRIPT_DIR}/ros_tb4_diagnostic.sh"
 CLEANUP_SOURCE="${SCRIPT_DIR}/ros_tb4_cleanup.sh"
 
-if [ "$EUID" -eq 0 ]; then
-    echo
-    echo "Do NOT run this script with sudo."
-    echo "Run it as your normal administrative account:"
-    echo
-    echo "    ./lab_setup/install.sh"
-    echo
-    exit 1
-fi
+#if [ "$EUID" -eq 0 ]; then
+#    echo
+#    echo "Do NOT run this script with sudo."
+#    echo "Run it as your normal administrative account:"
+#    echo
+#    echo "    ./lab_setup/install.sh"
+#    echo
+#    exit 1
+#fi
 
 if [ ! -r /opt/ros/jazzy/setup.bash ]; then
     echo "ERROR: ROS 2 Jazzy was not found under /opt/ros/jazzy."
