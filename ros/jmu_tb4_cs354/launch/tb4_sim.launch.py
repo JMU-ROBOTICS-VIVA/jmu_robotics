@@ -1,4 +1,6 @@
 import os
+import re
+import subprocess
 
 from ament_index_python.packages import get_package_share_directory
 
@@ -7,8 +9,6 @@ from launch.actions import (
     DeclareLaunchArgument,
     GroupAction,
     IncludeLaunchDescription,
-    LogInfo,
-    OpaqueFunction,
     SetLaunchConfiguration,
     TimerAction,
 )
@@ -42,83 +42,67 @@ def check_ros_domain_id():
         )
 
 
-def resolve_environment(context, pkg_tb4_gz, pkg_tb4_navigation):
-    """Resolve stock world names and instructor overrides to concrete paths."""
-    stock_world = LaunchConfiguration('world').perform(context)
-    world_file_override = LaunchConfiguration('world_file').perform(context).strip()
-    world_name_override = LaunchConfiguration('world_name').perform(context).strip()
-    map_yaml_override = LaunchConfiguration('map_yaml').perform(context).strip()
-
-    # Stock environments are intentionally easy for students to select.
-    if world_file_override:
-        world_file = os.path.abspath(os.path.expanduser(world_file_override))
-        world_name = (
-            world_name_override
-            if world_name_override
-            else os.path.splitext(os.path.basename(world_file))[0]
+def find_gazebo_sim_processes():
+    """Return running Gazebo Sim processes that could conflict with a new sim."""
+    try:
+        result = subprocess.run(
+            ['ps', '-eo', 'pid=,comm=,args='],
+            check=True,
+            capture_output=True,
+            text=True,
         )
-        # For a custom world, never silently pair it with a stock map.  An
-        # instructor must provide map_yaml explicitly if a static map is needed.
-        map_yaml = (
-            os.path.abspath(os.path.expanduser(map_yaml_override))
-            if map_yaml_override
-            else ''
-        )
-    else:
-        world_file = os.path.join(pkg_tb4_gz, 'worlds', f'{stock_world}.sdf')
-        world_name = world_name_override if world_name_override else stock_world
-        map_yaml = (
-            os.path.abspath(os.path.expanduser(map_yaml_override))
-            if map_yaml_override
-            else os.path.join(pkg_tb4_navigation, 'maps', f'{stock_world}.yaml')
-        )
-
-    if not os.path.isfile(world_file):
+    except (OSError, subprocess.CalledProcessError) as exc:
         raise RuntimeError(
-            f"Gazebo world file does not exist: {world_file}\n"
-            f"Selected world: {stock_world}"
-        )
+            'Unable to check for an existing Gazebo simulation before launch. '
+            'Refusing to start the simulator.\n'
+            f'Details: {exc}'
+        ) from exc
 
-    map_enabled = LaunchConfiguration('map').perform(context).lower() == 'true'
-    localization_enabled = (
-        LaunchConfiguration('localization').perform(context).lower() == 'true'
+    matches = []
+    gz_sim_command = re.compile(r'(?:^|[\s/])gz\s+sim(?:\s|$)')
+
+    for line in result.stdout.splitlines():
+        fields = line.strip().split(None, 2)
+        if len(fields) < 3:
+            continue
+
+        pid, command, args = fields
+        if (
+            command in {'gz-sim-server', 'gz-sim-gui'}
+            or gz_sim_command.search(args)
+        ):
+            matches.append((pid, args))
+
+    return matches
+
+
+def check_no_existing_gazebo_sim():
+    processes = find_gazebo_sim_processes()
+    if not processes:
+        return
+
+    process_text = '\n'.join(
+        f'  PID {pid}: {args}' for pid, args in processes
     )
-    slam_enabled = LaunchConfiguration('slam').perform(context).lower() == 'true'
-    nav2_enabled = LaunchConfiguration('nav2').perform(context).lower() == 'true'
-
-    # Static-map consumers need a YAML file.  SLAM is the exception because it
-    # produces a map rather than loading one.
-    needs_static_map = (
-        localization_enabled
-        or (nav2_enabled and not slam_enabled)
-        or (map_enabled and not localization_enabled and not slam_enabled)
+    raise RuntimeError(
+        '\n\n'
+        '============================================================\n'
+        'JMU TurtleBot 4 simulator startup blocked\n'
+        '============================================================\n'
+        'An existing Gazebo simulation process is still running.\n'
+        'Starting another simulator could connect to or conflict with the\n'
+        'existing Gazebo server.\n\n'
+        f'{process_text}\n\n'
+        'Run:\n'
+        '  ros_tb4_cleanup.sh\n\n'
+        'Then launch the simulator again.\n'
+        '============================================================\n'
     )
-
-    if needs_static_map and not map_yaml:
-        raise RuntimeError(
-            'This custom Gazebo world requires an explicit map_yaml:=... '
-            'when map/localization/static-map navigation is enabled.'
-        )
-    if needs_static_map and not os.path.isfile(map_yaml):
-        raise RuntimeError(
-            f"Map YAML file does not exist: {map_yaml}\n"
-            f"Selected world: {stock_world}"
-        )
-
-    map_description = map_yaml if map_yaml else '(none; not required)'
-
-    return [
-        SetLaunchConfiguration('resolved_world_file', world_file),
-        SetLaunchConfiguration('resolved_world_name', world_name),
-        SetLaunchConfiguration('resolved_map_yaml', map_yaml),
-        LogInfo(msg=f'[tb4_sim] Gazebo world: {world_file}'),
-        LogInfo(msg=f'[tb4_sim] Gazebo world name: {world_name}'),
-        LogInfo(msg=f'[tb4_sim] Occupancy map: {map_description}'),
-    ]
 
 
 def generate_launch_description():
     check_ros_domain_id()
+    check_no_existing_gazebo_sim()
 
     # Package directories
     pkg_jmu_tb4 = get_package_share_directory('jmu_tb4_cs354')
@@ -144,9 +128,19 @@ def generate_launch_description():
         'map.rviz'
     ])
 
-    # The top-level launch accepts a friendly stock world name.  Concrete
-    # paths are resolved after launch arguments have been parsed so that
-    # world:=maze can automatically select both maze.sdf and maze.yaml.
+    # Default stock TurtleBot world
+    default_world = PathJoinSubstitution([
+        pkg_tb4_gz,
+        'worlds',
+        'warehouse.sdf'
+    ])
+
+    # Default map for localization or the lightweight teaching map mode.
+    default_map = PathJoinSubstitution([
+        pkg_tb4_navigation,
+        'maps',
+        'warehouse.yaml'
+    ])
 
     arguments = [
         DeclareLaunchArgument(
@@ -159,28 +153,13 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'world',
-            default_value='warehouse',
-            choices=['warehouse', 'maze', 'depot'],
-            description=(
-                'Stock TurtleBot 4 environment. Automatically selects the '
-                'matching Gazebo SDF and, when needed, occupancy map.'
-            )
-        ),
-        DeclareLaunchArgument(
-            'world_file',
-            default_value='',
-            description=(
-                'Optional explicit Gazebo SDF path. Overrides the SDF selected '
-                'by world:=warehouse|maze|depot.'
-            )
+            default_value=default_world,
+            description='Full path to the Gazebo SDF world file'
         ),
         DeclareLaunchArgument(
             'world_name',
-            default_value='',
-            description=(
-                'Optional Gazebo world name override. Normally inferred from '
-                'the stock world selection; useful with world_file overrides.'
-            )
+            default_value='warehouse',
+            description='Name of the world inside the SDF file'
         ),
         DeclareLaunchArgument(
             'resource_path',
@@ -245,11 +224,8 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'map_yaml',
-            default_value='',
-            description=(
-                'Optional explicit occupancy-map YAML path. If omitted, the '
-                'map matching world:=warehouse|maze|depot is selected.'
-            )
+            default_value=default_map,
+            description='Map YAML file used by map mode or localization'
         ),
     ]
 
@@ -262,16 +238,11 @@ def generate_launch_description():
             )
         )
 
-    resolve_environment_action = OpaqueFunction(
-        function=resolve_environment,
-        args=[pkg_tb4_gz, pkg_tb4_navigation],
-    )
-
     # Start Gazebo.
     simulator = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([sim_launch]),
         launch_arguments={
-            'world': LaunchConfiguration('resolved_world_file'),
+            'world': LaunchConfiguration('world'),
             'resource_path': LaunchConfiguration('resource_path'),
             'model': LaunchConfiguration('model'),
             'use_sim_time': LaunchConfiguration('use_sim_time'),
@@ -305,12 +276,12 @@ def generate_launch_description():
                 launch_arguments={
                     'namespace': LaunchConfiguration('namespace'),
                     'model': LaunchConfiguration('model'),
-                    'world': LaunchConfiguration('resolved_world_name'),
+                    'world': LaunchConfiguration('world_name'),
                     'x': LaunchConfiguration('x'),
                     'y': LaunchConfiguration('y'),
                     'z': LaunchConfiguration('z'),
                     'yaw': LaunchConfiguration('yaw'),
-                    'map': LaunchConfiguration('resolved_map_yaml'),
+                    'map': LaunchConfiguration('map_yaml'),
                     'localization': LaunchConfiguration('localization'),
                     'slam': LaunchConfiguration('slam'),
                     'nav2': LaunchConfiguration('nav2'),
@@ -344,7 +315,7 @@ def generate_launch_description():
                 parameters=[{
                     'use_sim_time': LaunchConfiguration('use_sim_time'),
                     'yaml_filename': ParameterValue(
-                        LaunchConfiguration('resolved_map_yaml'),
+                        LaunchConfiguration('map_yaml'),
                         value_type=str,
                     ),
                 }],
@@ -419,7 +390,6 @@ def generate_launch_description():
     )
 
     ld = LaunchDescription(arguments)
-    ld.add_action(resolve_environment_action)
     ld.add_action(simulator)
     ld.add_action(configure_spawn_rviz)
     ld.add_action(robot)

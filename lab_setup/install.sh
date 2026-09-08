@@ -10,31 +10,32 @@ ROS_INSTALL="${INSTALL_ROOT}/ros"
 BIN_INSTALL="${INSTALL_ROOT}/bin"
 SHELL_INSTALL="${INSTALL_ROOT}/tb4_setup.bash"
 CONFIG_INSTALL="${INSTALL_ROOT}/tb4_setup.conf"
-GITHUB_LOGIN_INSTALL="${BIN_INSTALL}/jmu-github-login"
 FASTDDS_INSTALL="${INSTALL_ROOT}/fastdds/localhost-128.xml"
-
+GITHUB_LOGIN_INSTALL="${BIN_INSTALL}/jmu-github-login"
+DIAGNOSTIC_INSTALL="${BIN_INSTALL}/ros_tb4_diagnostic.sh"
+CLEANUP_INSTALL="${BIN_INSTALL}/ros_tb4_cleanup.sh"
 BASHRC="/etc/bash.bashrc"
-
 HOOK_BEGIN="# >>> JMU CS354 TurtleBot environment >>>"
+
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 ROS_SOURCE="${REPO_ROOT}/ros"
-ROS_REPOS="${ROS_SOURCE}/course_packages.repos"
 TB4_SETUP_SOURCE="${SCRIPT_DIR}/tb4_setup.bash"
 TB4_CONFIG_SOURCE="${SCRIPT_DIR}/tb4_setup.conf"
-GITHUB_LOGIN_SOURCE="${SCRIPT_DIR}/jmu-github-login.sh"
 FASTDDS_SOURCE="${SCRIPT_DIR}/fastdds/localhost-128.xml"
+GITHUB_LOGIN_SOURCE="${SCRIPT_DIR}/jmu-github-login"
+DIAGNOSTIC_SOURCE="${SCRIPT_DIR}/ros_tb4_diagnostic.sh"
+CLEANUP_SOURCE="${SCRIPT_DIR}/ros_tb4_cleanup.sh"
 
-# jmu install runs as root, so, we remove this for now
-#if [ "$EUID" -eq 0 ]; then
-#    echo
-#    echo "Do NOT run this script with sudo."
-#    echo "Run it as your normal administrative account:"
-#    echo
-#    echo "    ./lab_setup/install.sh"
-#    echo
-#    exit 1
-#fi
+if [ "$EUID" -eq 0 ]; then
+    echo
+    echo "Do NOT run this script with sudo."
+    echo "Run it as your normal administrative account:"
+    echo
+    echo "    ./lab_setup/install.sh"
+    echo
+    exit 1
+fi
 
 if [ ! -r /opt/ros/jazzy/setup.bash ]; then
     echo "ERROR: ROS 2 Jazzy was not found under /opt/ros/jazzy."
@@ -53,12 +54,6 @@ if [ ! -r "$TB4_SETUP_SOURCE" ]; then
     exit 1
 fi
 
-if [ ! -r "$GITHUB_LOGIN_SOURCE" ]; then
-    echo "ERROR: GitHub login script script not found:"
-    echo "       $GITHUB_LOGIN_SOURCE"
-    exit 1
-fi
-
 if [ ! -r "$TB4_CONFIG_SOURCE" ]; then
     echo "ERROR: TurtleBot site configuration not found:"
     echo "       $TB4_CONFIG_SOURCE"
@@ -71,16 +66,26 @@ if [ ! -r "$FASTDDS_SOURCE" ]; then
     exit 1
 fi
 
-if ! command -v colcon >/dev/null 2>&1; then
-    echo "ERROR: colcon was not found."
+if [ ! -r "$GITHUB_LOGIN_SOURCE" ]; then
+    echo "ERROR: GitHub login helper not found:"
+    echo "       $GITHUB_LOGIN_SOURCE"
     exit 1
 fi
 
-if ! command -v vcs >/dev/null 2>&1; then
-    echo "ERROR: vcs was not found."
-    echo "Install it with:"
-    echo
-    echo "    sudo apt install python3-vcstool"
+if [ ! -r "$DIAGNOSTIC_SOURCE" ]; then
+    echo "ERROR: TurtleBot diagnostic script not found:"
+    echo "       $DIAGNOSTIC_SOURCE"
+    exit 1
+fi
+
+if [ ! -r "$CLEANUP_SOURCE" ]; then
+    echo "ERROR: TurtleBot cleanup script not found:"
+    echo "       $CLEANUP_SOURCE"
+    exit 1
+fi
+
+if ! command -v colcon >/dev/null 2>&1; then
+    echo "ERROR: colcon was not found."
     exit 1
 fi
 
@@ -94,6 +99,9 @@ echo "    $REPO_ROOT"
 echo
 echo "ROS installation:"
 echo "    $ROS_INSTALL"
+echo
+echo "Command installation:"
+echo "    $BIN_INSTALL"
 echo
 echo "Shell setup:"
 echo "    $SHELL_INSTALL"
@@ -121,13 +129,6 @@ cleanup()
 }
 trap cleanup EXIT
 
-EXTERNAL_ROS_SOURCE="${WORK_DIR}/external_src"
-mkdir -p "$EXTERNAL_ROS_SOURCE"
-
-echo "Fetching external ROS packages..."
-
-vcs import "$EXTERNAL_ROS_SOURCE" < "$ROS_REPOS"
-
 # This prefix is dedicated to this course infrastructure, so rebuild it
 # from scratch to avoid stale files after renames/deletions.
 sudo rm -rf "$ROS_INSTALL"
@@ -138,7 +139,7 @@ echo "Building JMU ROS packages..."
 colcon \
     --log-base "$WORK_DIR/log" \
     build \
-    --base-paths "$ROS_SOURCE" "${EXTERNAL_ROS_SOURCE}" \
+    --base-paths "$ROS_SOURCE" \
     --build-base "$WORK_DIR/build" \
     --install-base "$ROS_INSTALL"
 
@@ -170,6 +171,8 @@ sudo install \
     "$FASTDDS_SOURCE" \
     "$FASTDDS_INSTALL"
 
+# Install student/admin helper commands. These are executable and live in
+# /opt/jmu/cs354/bin, which tb4_setup.bash adds to PATH.
 sudo install \
     -D \
     -o root \
@@ -177,6 +180,22 @@ sudo install \
     -m 0755 \
     "$GITHUB_LOGIN_SOURCE" \
     "$GITHUB_LOGIN_INSTALL"
+
+sudo install \
+    -D \
+    -o root \
+    -g root \
+    -m 0755 \
+    "$DIAGNOSTIC_SOURCE" \
+    "$DIAGNOSTIC_INSTALL"
+
+sudo install \
+    -D \
+    -o root \
+    -g root \
+    -m 0755 \
+    "$CLEANUP_SOURCE" \
+    "$CLEANUP_INSTALL"
 
 # Preserve the original file once, then add an idempotent hook.
 if [ ! -e "${BASHRC}.pre-jmu-cs354" ]; then
@@ -212,8 +231,10 @@ echo
 echo "Installed Fast DDS simulator profile:"
 echo "    $FASTDDS_INSTALL"
 echo
-echo "Installed GitHub login command:"
+echo "Installed helper commands:"
 echo "    $GITHUB_LOGIN_INSTALL"
+echo "    $DIAGNOSTIC_INSTALL"
+echo "    $CLEANUP_INSTALL"
 echo
 echo "Open a NEW terminal to test the installation."
 echo
