@@ -15,7 +15,6 @@
 # Based on turtlebot4_gz_bringup/launch/sim.launch.py.
 # Modified for JMU CS354 to support a full world path, an optional additional
 # resource path, and GUI / server-only operation.
-
 import os
 from pathlib import Path
 
@@ -27,7 +26,6 @@ from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
-
 
 ARGUMENTS = [
     DeclareLaunchArgument(
@@ -50,9 +48,9 @@ ARGUMENTS = [
         description='Launch the Gazebo graphical client'),
 ]
 
-
 def generate_launch_description():
     # Directories
+    pkg_jmu_tb4 = get_package_share_directory('jmu_tb4_cs354')
     pkg_turtlebot4_gz_bringup = get_package_share_directory(
         'turtlebot4_gz_bringup')
     pkg_turtlebot4_gz_gui_plugins = get_package_share_directory(
@@ -66,7 +64,6 @@ def generate_launch_description():
     pkg_irobot_create_gz_plugins = get_package_share_directory(
         'irobot_create_gz_plugins')
     pkg_ros_gz_sim = get_package_share_directory('ros_gz_sim')
-
     # Preserve the stock TurtleBot / Create 3 Gazebo search paths and append
     # an optional JMU-specific resource path supplied by the caller.
     standard_resource_path = ':'.join([
@@ -75,7 +72,6 @@ def generate_launch_description():
         str(Path(pkg_turtlebot4_description).parent.resolve()),
         str(Path(pkg_irobot_create_description).parent.resolve()),
     ])
-
     gz_resource_path = SetEnvironmentVariable(
         name='GZ_SIM_RESOURCE_PATH',
         value=[
@@ -92,20 +88,19 @@ def generate_launch_description():
             os.path.join(pkg_irobot_create_gz_plugins, 'lib'),
         ])
     )
-
     gz_sim_launch = PathJoinSubstitution([
         pkg_ros_gz_sim,
         'launch',
         'gz_sim.launch.py',
     ])
 
+    # Use the JMU classroom GUI: 3D world + compact simulation controls,
+    # without the TurtleBot HMI / teleop or Gazebo object-editing toolbars.
     gui_config = PathJoinSubstitution([
-        pkg_turtlebot4_gz_bringup,
+        pkg_jmu_tb4,
         'gui',
-        LaunchConfiguration('model'),
-        'gui.config',
+        'cs354.gui.config',
     ])
-
     # Normal classroom mode: run both the Gazebo server and graphical client.
     gazebo_with_gui = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([gz_sim_launch]),
@@ -121,7 +116,6 @@ def generate_launch_description():
         }.items(),
         condition=IfCondition(LaunchConfiguration('gazebo_gui')),
     )
-
     # Battery / CPU friendly mode: run only the Gazebo server.  RViz can still
     # be launched independently by spawn.launch.py.
     gazebo_server_only = IncludeLaunchDescription(
@@ -137,7 +131,6 @@ def generate_launch_description():
         }.items(),
         condition=UnlessCondition(LaunchConfiguration('gazebo_gui')),
     )
-
     # Clock bridge
     clock_bridge = Node(
         package='ros_gz_bridge',

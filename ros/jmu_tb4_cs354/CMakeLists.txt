@@ -9,9 +9,8 @@ install(
 )
 
 install(
-  DIRECTORY launch rviz
+  DIRECTORY launch rviz gui
   DESTINATION share/${PROJECT_NAME}
 )
 
 ament_package()
-
