@@ -11,8 +11,8 @@ BIN_INSTALL="${INSTALL_ROOT}/bin"
 SHELL_INSTALL="${INSTALL_ROOT}/tb4_setup.bash"
 CONFIG_INSTALL="${INSTALL_ROOT}/tb4_setup.conf"
 FASTDDS_INSTALL="${INSTALL_ROOT}/fastdds/localhost-128.xml"
-GITHUB_LOGIN_INSTALL="${BIN_INSTALL}/jmu-github-login"
-DIAGNOSTIC_INSTALL="${BIN_INSTALL}/ros_tb4_diagnostic.sh"
+GITHUB_LOGIN_INSTALL="${BIN_INSTALL}/jmu-github-login.sh"
+DIAGNOSTIC_INSTALL="${BIN_INSTALL}/ros_tb4_diagnostics.sh"
 CLEANUP_INSTALL="${BIN_INSTALL}/ros_tb4_cleanup.sh"
 BASHRC="/etc/bash.bashrc"
 HOOK_BEGIN="# >>> JMU CS354 TurtleBot environment >>>"
@@ -20,12 +20,12 @@ HOOK_BEGIN="# >>> JMU CS354 TurtleBot environment >>>"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 ROS_SOURCE="${REPO_ROOT}/ros"
-COURSE_REPOS="${REPO_ROOT}/course_packages.repos"
+COURSE_REPOS="${REPO_ROOT}/ros/course_packages.repos"
 TB4_SETUP_SOURCE="${SCRIPT_DIR}/tb4_setup.bash"
 TB4_CONFIG_SOURCE="${SCRIPT_DIR}/tb4_setup.conf"
 FASTDDS_SOURCE="${SCRIPT_DIR}/fastdds/localhost-128.xml"
-GITHUB_LOGIN_SOURCE="${SCRIPT_DIR}/jmu-github-login"
-DIAGNOSTIC_SOURCE="${SCRIPT_DIR}/ros_tb4_diagnostic.sh"
+GITHUB_LOGIN_SOURCE="${SCRIPT_DIR}/jmu-github-login.sh"
+DIAGNOSTIC_SOURCE="${SCRIPT_DIR}/ros_tb4_diagnostics.sh"
 CLEANUP_SOURCE="${SCRIPT_DIR}/ros_tb4_cleanup.sh"
 
 ## JMU install runs as root
@@ -82,7 +82,7 @@ if [ ! -r "$GITHUB_LOGIN_SOURCE" ]; then
 fi
 
 if [ ! -r "$DIAGNOSTIC_SOURCE" ]; then
-    echo "ERROR: TurtleBot diagnostic script not found:"
+    echo "ERROR: TurtleBot diagnostics script not found:"
     echo "       $DIAGNOSTIC_SOURCE"
     exit 1
 fi
