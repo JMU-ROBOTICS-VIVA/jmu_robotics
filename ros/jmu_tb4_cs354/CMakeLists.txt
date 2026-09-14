@@ -4,6 +4,12 @@ project(jmu_tb4_cs354)
 find_package(ament_cmake REQUIRED)
 
 install(
+  PROGRAMS scripts/transform_point.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME transform_point
+)
+
+install(
   PROGRAMS scripts/sim_robot_description.py
   DESTINATION share/${PROJECT_NAME}/scripts
 )

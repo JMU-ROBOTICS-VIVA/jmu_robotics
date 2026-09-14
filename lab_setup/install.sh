@@ -11,8 +11,8 @@ BIN_INSTALL="${INSTALL_ROOT}/bin"
 SHELL_INSTALL="${INSTALL_ROOT}/tb4_setup.bash"
 CONFIG_INSTALL="${INSTALL_ROOT}/tb4_setup.conf"
 FASTDDS_INSTALL="${INSTALL_ROOT}/fastdds/localhost-128.xml"
-GITHUB_LOGIN_INSTALL="${BIN_INSTALL}/jmu-github-login.sh"
-DIAGNOSTIC_INSTALL="${BIN_INSTALL}/ros_tb4_diagnostics.sh"
+GITHUB_LOGIN_INSTALL="${BIN_INSTALL}/jmu-github-login"
+DIAGNOSTIC_INSTALL="${BIN_INSTALL}/ros_tb4_diagnostic.sh"
 CLEANUP_INSTALL="${BIN_INSTALL}/ros_tb4_cleanup.sh"
 BASHRC="/etc/bash.bashrc"
 HOOK_BEGIN="# >>> JMU CS354 TurtleBot environment >>>"
@@ -20,12 +20,15 @@ HOOK_BEGIN="# >>> JMU CS354 TurtleBot environment >>>"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 ROS_SOURCE="${REPO_ROOT}/ros"
+COURSE_REPOS="${REPO_ROOT}/course_packages.repos"
 TB4_SETUP_SOURCE="${SCRIPT_DIR}/tb4_setup.bash"
 TB4_CONFIG_SOURCE="${SCRIPT_DIR}/tb4_setup.conf"
 FASTDDS_SOURCE="${SCRIPT_DIR}/fastdds/localhost-128.xml"
-GITHUB_LOGIN_SOURCE="${SCRIPT_DIR}/jmu-github-login.sh"
-DIAGNOSTIC_SOURCE="${SCRIPT_DIR}/ros_tb4_diagnostics.sh"
+GITHUB_LOGIN_SOURCE="${SCRIPT_DIR}/jmu-github-login"
+DIAGNOSTIC_SOURCE="${SCRIPT_DIR}/ros_tb4_diagnostic.sh"
 CLEANUP_SOURCE="${SCRIPT_DIR}/ros_tb4_cleanup.sh"
+
+## JMU install runs as root
 
 #if [ "$EUID" -eq 0 ]; then
 #    echo
@@ -45,6 +48,12 @@ fi
 if [ ! -d "$ROS_SOURCE" ]; then
     echo "ERROR: ROS source directory not found:"
     echo "       $ROS_SOURCE"
+    exit 1
+fi
+
+if [ ! -r "$COURSE_REPOS" ]; then
+    echo "ERROR: Course package repository list not found:"
+    echo "       $COURSE_REPOS"
     exit 1
 fi
 
@@ -89,6 +98,12 @@ if ! command -v colcon >/dev/null 2>&1; then
     exit 1
 fi
 
+if ! command -v vcs >/dev/null 2>&1; then
+    echo "ERROR: vcs was not found."
+    echo "Install python3-vcstool before running this installer."
+    exit 1
+fi
+
 echo
 echo "============================================================"
 echo " Installing JMU CS354 TurtleBot infrastructure"
@@ -112,6 +127,9 @@ echo
 echo "Fast DDS simulator profile:"
 echo "    $FASTDDS_INSTALL"
 echo
+echo "Course package repository list:"
+echo "    $COURSE_REPOS"
+echo
 
 sudo -v
 
@@ -123,23 +141,30 @@ source /opt/ros/jazzy/setup.bash
 set -u
 
 WORK_DIR="$(mktemp -d /tmp/jmu-cs354-build.XXXXXX)"
+COURSE_SOURCE="${WORK_DIR}/course_packages"
 cleanup()
 {
     rm -rf "$WORK_DIR"
 }
 trap cleanup EXIT
 
+mkdir -p "$COURSE_SOURCE"
+
+echo "Importing course ROS packages..."
+vcs import "$COURSE_SOURCE" < "$COURSE_REPOS"
+echo
+
 # This prefix is dedicated to this course infrastructure, so rebuild it
 # from scratch to avoid stale files after renames/deletions.
 sudo rm -rf "$ROS_INSTALL"
 sudo install -d -o "$(id -un)" -g "$(id -gn)" -m 0755 "$ROS_INSTALL"
 
-echo "Building JMU ROS packages..."
+echo "Building JMU and course ROS packages..."
 
 colcon \
     --log-base "$WORK_DIR/log" \
     build \
-    --base-paths "$ROS_SOURCE" \
+    --base-paths "$ROS_SOURCE" "$COURSE_SOURCE" \
     --build-base "$WORK_DIR/build" \
     --install-base "$ROS_INSTALL"
 

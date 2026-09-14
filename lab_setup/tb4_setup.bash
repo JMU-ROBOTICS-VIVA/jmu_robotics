@@ -7,9 +7,6 @@
 # Valid physical selections come from /opt/jmu/cs354/tb4_setup.conf.
 # S selects the simulator. ALL selects every configured physical robot.
 
-# insert our binary directory
-export PATH="/opt/jmu/cs354/bin:$PATH"
-
 # Load site-wide fleet configuration from the same directory as this script.
 _JMU_TB4_SETUP_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 _JMU_TB4_SITE_CONFIG="${_JMU_TB4_SETUP_DIR}/tb4_setup.conf"
@@ -42,13 +39,13 @@ else
     echo "WARNING: JMU CS354 ROS installation was not found."
 fi
 
-if [ -r "$HOME/dev_ws/install/local_setup.bash" ]; then
-    source "$HOME/dev_ws/install/local_setup.bash"
+if [ -r "$HOME/rosdev/install/local_setup.bash" ]; then
+    source "$HOME/rosdev/install/local_setup.bash"
 fi
 
 export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
 
-# Use human-readable timestamps in ROS 2 console logging.
+# Use human-readable timestamps for ROS console log messages.
 export RCUTILS_CONSOLE_OUTPUT_FORMAT="[{severity}] [{date_time_with_ms}] [{name}]: {message}"
 
 _JMU_TB4_CONFIG_DIR="$HOME/.config/jmu_tb4"
