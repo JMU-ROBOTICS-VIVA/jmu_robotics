@@ -4,9 +4,27 @@
 # Installed as /opt/jmu/cs354/tb4_setup.bash and sourced by /etc/bash.bashrc.
 #
 # Per-user selection is stored in ~/.config/jmu_tb4/selection.
-# Valid selections: S (simulator) or 1-7 (physical TurtleBot).
+# Valid physical selections come from /opt/jmu/cs354/tb4_setup.conf.
+# S selects the simulator. ALL selects every configured physical robot.
 
-[[ $- != *i* ]] && return
+# Load site-wide fleet configuration from the same directory as this script.
+_JMU_TB4_SETUP_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+_JMU_TB4_SITE_CONFIG="${_JMU_TB4_SETUP_DIR}/tb4_setup.conf"
+
+if [ -r "$_JMU_TB4_SITE_CONFIG" ]; then
+    source "$_JMU_TB4_SITE_CONFIG"
+else
+    echo "WARNING: JMU TurtleBot site configuration was not found:"
+    echo "         $_JMU_TB4_SITE_CONFIG"
+    PHYSICAL_ROBOTS=()
+    SIM_NAMESPACE="/robotsim1"
+fi
+
+# ROS / DDS site defaults.  These may also be set in tb4_setup.conf
+# before this point if we later want to make them site-configurable.
+PHYSICAL_ROS_DOMAIN_ID="${PHYSICAL_ROS_DOMAIN_ID:-42}"
+SIM_ROS_DOMAIN_ID="${SIM_ROS_DOMAIN_ID:-43}"
+SIM_FASTDDS_PROFILE="${SIM_FASTDDS_PROFILE:-${_JMU_TB4_SETUP_DIR}/fastdds/localhost-128.xml}"
 
 # ROS environment: base -> JMU infrastructure -> student overlay
 if [ -r /opt/ros/jazzy/setup.bash ]; then
@@ -25,18 +43,96 @@ if [ -r "$HOME/rosdev/install/local_setup.bash" ]; then
     source "$HOME/rosdev/install/local_setup.bash"
 fi
 
-export ROS_DOMAIN_ID=42
 export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+
+# Use human-readable timestamps for ROS console log messages.
+export RCUTILS_CONSOLE_OUTPUT_FORMAT="[{severity}] [{date_time_with_ms}] [{name}]: {message}"
 
 _JMU_TB4_CONFIG_DIR="$HOME/.config/jmu_tb4"
 _JMU_TB4_SELECTION_FILE="$_JMU_TB4_CONFIG_DIR/selection"
 
+# Return success only when the requested number is explicitly listed in
+# PHYSICAL_ROBOTS.  This protects against both invalid menu input and a
+# manually edited per-user selection file.
+_jmu_tb4_is_physical_robot()
+{
+    local candidate="$1"
+    local robot
+
+    [[ "$candidate" =~ ^[1-9][0-9]*$ ]] || return 1
+
+    for robot in "${PHYSICAL_ROBOTS[@]}"; do
+        if [ "$candidate" = "$robot" ]; then
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+_jmu_tb4_robot_choices()
+{
+    local IFS=,
+    printf '%s' "${PHYSICAL_ROBOTS[*]}"
+}
+
+# Build ROS_DISCOVERY_SERVER while preserving Fast DDS server IDs.
+# Server ID N must occupy position N in the semicolon-separated list, so
+# unconfigured IDs are represented by empty entries.
+_jmu_tb4_discovery_server_for()
+{
+    local selection="$1"
+    local max_robot=0
+    local robot
+    local i
+    local locator
+    local result=""
+
+    if [ "$selection" = "ALL" ]; then
+        [ "${#PHYSICAL_ROBOTS[@]}" -gt 0 ] || return 1
+
+        for robot in "${PHYSICAL_ROBOTS[@]}"; do
+            if (( robot > max_robot )); then
+                max_robot="$robot"
+            fi
+        done
+    else
+        _jmu_tb4_is_physical_robot "$selection" || return 1
+        max_robot="$selection"
+    fi
+
+    for ((i=0; i<=max_robot; i++)); do
+        if (( i > 0 )); then
+            result="${result};"
+        fi
+
+        locator=""
+        if [ "$selection" = "ALL" ]; then
+            if _jmu_tb4_is_physical_robot "$i"; then
+                locator="tb${i}.cs.jmu.edu:11811"
+            fi
+        elif (( i == selection )); then
+            locator="tb${i}.cs.jmu.edu:11811"
+        fi
+
+        result="${result}${locator}"
+    done
+
+    printf '%s' "$result"
+}
+
 # Safe, unselected state: do not perform subnet-wide discovery.
+# Keep the physical-fleet domain as the neutral default, but do not
+# configure a discovery server until a robot is explicitly selected.
 _jmu_tb4_clear()
 {
+    export ROS_DOMAIN_ID="$PHYSICAL_ROS_DOMAIN_ID"
     unset ROBOT_NAMESPACE
     unset ROS_DISCOVERY_SERVER
     unset ROS_SUPER_CLIENT
+    unset ROS_STATIC_PEERS
+    unset FASTRTPS_DEFAULT_PROFILES_FILE
+    unset FASTDDS_DEFAULT_PROFILES_FILE
     export ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
 }
 
@@ -44,50 +140,67 @@ _jmu_tb4_clear()
 _jmu_tb4_apply()
 {
     local selection="$1"
+    local discovery_server
 
-    case "$selection" in
-        S|s)
-            # Simulator namespace is outside physical robot numbers 1-7.
-            export ROBOT_NAMESPACE="/robot9"
-            unset ROS_DISCOVERY_SERVER
-            unset ROS_SUPER_CLIENT
-            export ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
-            ;;
-
-        [1-7])
-            export ROBOT_NAMESPACE="/robot${selection}"
-
-            # Physical robot N uses Discovery Server ID N.
-            #
-            # In ROS_DISCOVERY_SERVER, the server ID is represented by its
-            # zero-based position in the semicolon-separated list. Because
-            # our robots intentionally use IDs 1 through 7, Robot N needs N
-            # empty entries before its server locator:
-            #
-            #   Robot 1: ;tb1.cs.jmu.edu:11811
-            #   Robot 2: ;;tb2.cs.jmu.edu:11811
-            #   ...
-            #   Robot 7: ;;;;;;;tb7.cs.jmu.edu:11811
-            #
-            local server_prefix=""
-            local i
-
-            for ((i=0; i<selection; i++)); do
-                server_prefix="${server_prefix};"
-            done
-
-            export ROS_DISCOVERY_SERVER="${server_prefix}tb${selection}.cs.jmu.edu:11811"
-
-            export ROS_SUPER_CLIENT=TRUE
-            unset ROS_AUTOMATIC_DISCOVERY_RANGE
-            ;;
-
-        *)
+    if [[ "$selection" =~ ^[Ss]$ ]]; then
+        if [ ! -r "$SIM_FASTDDS_PROFILE" ]; then
+            echo "ERROR: Simulator Fast DDS profile is not readable:" >&2
+            echo "       $SIM_FASTDDS_PROFILE" >&2
             return 1
-            ;;
-    esac
+        fi
 
-    return 0
+        export ROS_DOMAIN_ID="$SIM_ROS_DOMAIN_ID"
+        export ROBOT_NAMESPACE="$SIM_NAMESPACE"
+
+        # Simulator DDS discovery is intentionally restricted to this host.
+        # SYSTEM_DEFAULT prevents rmw_fastrtps from installing the Jazzy
+        # LOCALHOST configuration with its hard-coded 32-peer range.
+        unset ROS_DISCOVERY_SERVER
+        unset ROS_SUPER_CLIENT
+        unset ROS_STATIC_PEERS
+        export ROS_AUTOMATIC_DISCOVERY_RANGE=SYSTEM_DEFAULT
+        export FASTRTPS_DEFAULT_PROFILES_FILE="$SIM_FASTDDS_PROFILE"
+
+        # Fast DDS 2.14 uses FASTRTPS_DEFAULT_PROFILES_FILE.  Clear the
+        # newer variable as a precaution against a conflicting environment.
+        unset FASTDDS_DEFAULT_PROFILES_FILE
+        return 0
+    fi
+
+    if [ "$selection" = "ALL" ]; then
+        if ! discovery_server="$(_jmu_tb4_discovery_server_for ALL)"; then
+            return 1
+        fi
+
+        # Fleet mode intentionally has no single robot namespace.
+        export ROS_DOMAIN_ID="$PHYSICAL_ROS_DOMAIN_ID"
+        unset ROBOT_NAMESPACE
+        unset ROS_STATIC_PEERS
+        unset FASTRTPS_DEFAULT_PROFILES_FILE
+        unset FASTDDS_DEFAULT_PROFILES_FILE
+        export ROS_DISCOVERY_SERVER="$discovery_server"
+        export ROS_SUPER_CLIENT=TRUE
+        unset ROS_AUTOMATIC_DISCOVERY_RANGE
+        return 0
+    fi
+
+    if _jmu_tb4_is_physical_robot "$selection"; then
+        if ! discovery_server="$(_jmu_tb4_discovery_server_for "$selection")"; then
+            return 1
+        fi
+
+        export ROS_DOMAIN_ID="$PHYSICAL_ROS_DOMAIN_ID"
+        export ROBOT_NAMESPACE="/robot${selection}"
+        unset ROS_STATIC_PEERS
+        unset FASTRTPS_DEFAULT_PROFILES_FILE
+        unset FASTDDS_DEFAULT_PROFILES_FILE
+        export ROS_DISCOVERY_SERVER="$discovery_server"
+        export ROS_SUPER_CLIENT=TRUE
+        unset ROS_AUTOMATIC_DISCOVERY_RANGE
+        return 0
+    fi
+
+    return 1
 }
 
 _jmu_tb4_print_status()
@@ -98,13 +211,19 @@ _jmu_tb4_print_status()
     echo "------------------------------------------------------------"
     echo "JMU CS354 TurtleBot Environment"
     echo
+    echo "  ROS domain:  ${ROS_DOMAIN_ID:-<unset>}"
+    echo
 
     if [ ! -r "$_JMU_TB4_SELECTION_FILE" ]; then
         echo "  No robot environment has been selected."
         echo
         echo "Run 'tb4-select' to select:"
-        echo "  S     Simulator"
-        echo "  1-7   Physical TurtleBot"
+        echo "  S                 Simulator ($SIM_NAMESPACE)"
+        if [ "${#PHYSICAL_ROBOTS[@]}" -gt 0 ]; then
+            echo "  ${PHYSICAL_ROBOTS[*]}   Physical TurtleBot(s)"
+        else
+            echo "  No physical TurtleBots are currently configured."
+        fi
         echo "------------------------------------------------------------"
         echo
         return 1
@@ -112,27 +231,42 @@ _jmu_tb4_print_status()
 
     selection=$(<"$_JMU_TB4_SELECTION_FILE")
 
-    case "$selection" in
-        S)
-            echo "  Mode:       Simulator"
-            echo "  Namespace:  $ROBOT_NAMESPACE"
-            echo
-            echo "Run 'tb4-select' to change environments."
-            ;;
-        [1-7])
-            echo "  Mode:       Physical Robot"
-            echo "  Robot:      $selection"
-            echo "  Host:       tb${selection}.cs.jmu.edu"
-            echo "  Namespace:  $ROBOT_NAMESPACE"
-            echo
-            echo "Run 'tb4-select' to change environments."
-            ;;
-        *)
-            echo "  WARNING: Invalid saved configuration."
-            echo
-            echo "Run 'tb4-select' to select an environment."
-            ;;
-    esac
+    if [[ "$selection" =~ ^[Ss]$ ]]; then
+        echo "  Mode:       Simulator"
+        echo "  Namespace:  $ROBOT_NAMESPACE"
+        echo "  Discovery:  localhost-only Fast DDS profile"
+        echo "  DDS profile: ${FASTRTPS_DEFAULT_PROFILES_FILE:-<unset>}"
+        if [ "${ROS_DOMAIN_ID:-}" != "$SIM_ROS_DOMAIN_ID" ]; then
+            echo "  WARNING: expected simulator ROS_DOMAIN_ID=$SIM_ROS_DOMAIN_ID"
+        fi
+        echo
+        echo "Run 'tb4-select' to change environments."
+    elif [ "$selection" = "ALL" ]; then
+        echo "  Mode:       Fleet / all robots"
+        echo "  Robots:     ${PHYSICAL_ROBOTS[*]}"
+        echo "  Namespace:  <none; multi-robot mode>"
+        echo "  Discovery:  Fast DDS discovery servers"
+        if [ "${ROS_DOMAIN_ID:-}" != "$PHYSICAL_ROS_DOMAIN_ID" ]; then
+            echo "  WARNING: expected physical ROS_DOMAIN_ID=$PHYSICAL_ROS_DOMAIN_ID"
+        fi
+        echo
+        echo "Run 'tb4-select' to change environments."
+    elif _jmu_tb4_is_physical_robot "$selection"; then
+        echo "  Mode:       Physical Robot"
+        echo "  Robot:      $selection"
+        echo "  Host:       tb${selection}.cs.jmu.edu"
+        echo "  Namespace:  $ROBOT_NAMESPACE"
+        echo "  Discovery:  Fast DDS discovery server"
+        if [ "${ROS_DOMAIN_ID:-}" != "$PHYSICAL_ROS_DOMAIN_ID" ]; then
+            echo "  WARNING: expected physical ROS_DOMAIN_ID=$PHYSICAL_ROS_DOMAIN_ID"
+        fi
+        echo
+        echo "Run 'tb4-select' to change environments."
+    else
+        echo "  WARNING: Invalid saved configuration."
+        echo
+        echo "Run 'tb4-select' to select an environment."
+    fi
 
     echo "------------------------------------------------------------"
     echo
@@ -143,19 +277,108 @@ tb4-status()
     _jmu_tb4_print_status
 }
 
-_jmu_tb4_require_robot_namespace()
+_jmu_tb4_list_robots()
 {
-    if [ -z "${ROBOT_NAMESPACE:-}" ]; then
-        echo "No single TurtleBot environment is selected."
-        echo "Run 'tb4-select' and select the simulator or one physical robot."
-        return 1
+    local robot
+
+    echo "Configured physical TurtleBots:"
+    for robot in "${PHYSICAL_ROBOTS[@]}"; do
+        echo "  $robot    tb${robot}.cs.jmu.edu"
+    done
+}
+
+_jmu_tb4_commit_selection()
+{
+    local selection="$1"
+
+    # Simulator and physical-robot modes use different ROS domains.
+    # Stop any ROS CLI daemon for either domain so a later ros2 command
+    # cannot reconnect to a daemon retaining stale discovery settings.
+    ROS_DOMAIN_ID="$PHYSICAL_ROS_DOMAIN_ID" ros2 daemon stop >/dev/null 2>&1 || true
+    ROS_DOMAIN_ID="$SIM_ROS_DOMAIN_ID" ros2 daemon stop >/dev/null 2>&1 || true
+
+    mkdir -p "$_JMU_TB4_CONFIG_DIR"
+    printf '%s\n' "$selection" > "$_JMU_TB4_SELECTION_FILE"
+
+    _jmu_tb4_apply "$selection"
+}
+
+_jmu_tb4_print_selection_confirmation()
+{
+    local selection="$1"
+
+    echo
+    echo "============================================================"
+
+    if [ "$selection" = "S" ]; then
+        echo " This terminal is now configured for the SIMULATOR."
+        echo
+        echo " Namespace: $ROBOT_NAMESPACE"
+    elif [ "$selection" = "ALL" ]; then
+        echo " This terminal is now configured for ALL PHYSICAL ROBOTS."
+        echo
+        echo " Robots:    ${PHYSICAL_ROBOTS[*]}"
+        echo " Namespace: <none; multi-robot mode>"
+    else
+        echo " This terminal is now configured for ROBOT $selection."
+        echo
+        echo " Host:      tb${selection}.cs.jmu.edu"
+        echo " Namespace: $ROBOT_NAMESPACE"
     fi
+
+    echo
+    echo " New terminals will automatically use this configuration."
+    echo "============================================================"
+    echo
 }
 
 tb4-select()
 {
     local answer
     local selection
+    local robot
+    local robot_choices
+
+    # Script/admin forms. These intentionally bypass the interactive safety
+    # prompt so they can be used from automation after sourcing this file.
+    if [ "$#" -gt 0 ]; then
+        if [ "$#" -ne 1 ]; then
+            echo "Usage: tb4-select [S|ROBOT_NUMBER|--all|--list]" >&2
+            return 2
+        fi
+
+        case "$1" in
+            --list|-l)
+                _jmu_tb4_list_robots
+                return 0
+                ;;
+            --all|all|ALL)
+                selection="ALL"
+                ;;
+            S|s|--sim)
+                selection="S"
+                ;;
+            *)
+                if _jmu_tb4_is_physical_robot "$1"; then
+                    selection="$1"
+                else
+                    echo "Invalid TurtleBot selection: $1" >&2
+                    echo "Configured robots: ${PHYSICAL_ROBOTS[*]}" >&2
+                    return 2
+                fi
+                ;;
+        esac
+
+        if ! _jmu_tb4_commit_selection "$selection"; then
+            echo "ERROR: Could not apply TurtleBot configuration." >&2
+            return 1
+        fi
+
+        _jmu_tb4_print_selection_confirmation "$selection"
+        return 0
+    fi
+
+    robot_choices="$(_jmu_tb4_robot_choices)"
 
     echo
     echo "============================================================"
@@ -172,7 +395,6 @@ tb4-select()
     echo
     echo "Already-running processes cannot receive the new environment."
     echo
-
     read -r -p "Type YES when you have done this: " answer
 
     if [ "$answer" != "YES" ]; then
@@ -185,88 +407,101 @@ tb4-select()
     echo
     echo "Select the environment:"
     echo
-    echo "    S     Simulator"
-    echo "    1     TurtleBot 1"
-    echo "    2     TurtleBot 2"
-    echo "    3     TurtleBot 3"
-    echo "    4     TurtleBot 4"
-    echo "    5     TurtleBot 5"
-    echo "    6     TurtleBot 6"
-    echo "    7     TurtleBot 7"
+    echo "    S     Simulator ($SIM_NAMESPACE)"
+    for robot in "${PHYSICAL_ROBOTS[@]}"; do
+        echo "    $robot     TurtleBot $robot"
+    done
     echo
 
     while true; do
-        read -r -p "Selection [S,1-7]: " selection
+        if [ -n "$robot_choices" ]; then
+            read -r -p "Selection [S,${robot_choices}]: " selection
+        else
+            read -r -p "Selection [S]: " selection
+        fi
 
-        case "$selection" in
-            S|s)
-                selection="S"
-                break
-                ;;
-            [1-7])
-                break
-                ;;
-            *)
-                echo
-                echo "Invalid selection. Enter S or a number from 1 through 7."
-                echo
-                ;;
-        esac
+        if [[ "$selection" =~ ^[Ss]$ ]]; then
+            selection="S"
+            break
+        fi
+
+        if _jmu_tb4_is_physical_robot "$selection"; then
+            break
+        fi
+
+        echo
+        if [ -n "$robot_choices" ]; then
+            echo "Invalid selection. Enter S or one of: ${PHYSICAL_ROBOTS[*]}."
+        else
+            echo "Invalid selection. Only S (simulator) is currently available."
+        fi
+        echo
     done
 
-    # Stop the ROS CLI daemon while this shell still has the OLD discovery
-    # environment, avoiding a daemon that retains stale discovery settings.
-    ros2 daemon stop >/dev/null 2>&1 || true
-
-    mkdir -p "$_JMU_TB4_CONFIG_DIR"
-    printf '%s\n' "$selection" > "$_JMU_TB4_SELECTION_FILE"
-
-    if ! _jmu_tb4_apply "$selection"; then
+    if ! _jmu_tb4_commit_selection "$selection"; then
         echo
         echo "ERROR: Could not apply TurtleBot configuration."
         echo
         return 1
     fi
 
-    echo
-    echo "============================================================"
-
-    if [ "$selection" = "S" ]; then
-        echo " This terminal is now configured for the SIMULATOR."
-        echo
-        echo " Namespace: $ROBOT_NAMESPACE"
-    else
-        echo " This terminal is now configured for ROBOT $selection."
-        echo
-        echo " Host:      tb${selection}.cs.jmu.edu"
-        echo " Namespace: $ROBOT_NAMESPACE"
-    fi
-
-    echo
-    echo " New terminals will automatically use this configuration."
-    echo "============================================================"
-    echo
+    _jmu_tb4_print_selection_confirmation "$selection"
 }
 
 # Convenience wrapper. ROBOT_NAMESPACE is a JMU environment variable;
 # arbitrary ROS nodes do not automatically use it. This explicitly places
 # teleop_twist_keyboard in the selected namespace, so its relative cmd_vel
-# publisher resolves to /robotN/cmd_vel.
+# publisher resolves beneath the selected robot namespace.
 tb4-teleop()
 {
-    _jmu_tb4_require_robot_namespace || return 1
+    if [ -z "${ROBOT_NAMESPACE:-}" ]; then
+        if [ "${_jmu_tb4_saved_selection:-}" = "ALL" ] || \
+           { [ -r "$_JMU_TB4_SELECTION_FILE" ] && [ "$(<"$_JMU_TB4_SELECTION_FILE")" = "ALL" ]; }; then
+            echo "Fleet mode is selected; teleop requires one robot."
+            echo "Run 'tb4-select ROBOT_NUMBER' first."
+        else
+            echo "No single TurtleBot environment is selected."
+            echo "Run 'tb4-select' first."
+        fi
+        return 1
+    fi
 
     ros2 run teleop_twist_keyboard teleop_twist_keyboard \
         --ros-args \
+        -p stamped:=true \
         -r "__ns:=${ROBOT_NAMESPACE}"
 }
 
+# Require a single selected robot (simulated or physical) for helpers that
+# operate on one robot-specific namespace.  Fleet mode intentionally has no
+# ROBOT_NAMESPACE because it exposes multiple robots at once.
+_jmu_tb4_require_single_robot()
+{
+    if [ -n "${ROBOT_NAMESPACE:-}" ]; then
+        return 0
+    fi
+
+    if [ "${_jmu_tb4_saved_selection:-}" = "ALL" ] || \
+       { [ -r "$_JMU_TB4_SELECTION_FILE" ] && [ "$(<"$_JMU_TB4_SELECTION_FILE")" = "ALL" ]; }; then
+        echo "Fleet mode is selected; this command requires one robot."
+        echo "Run 'tb4-select ROBOT_NUMBER' or 'tb4-select S' first."
+    else
+        echo "No single TurtleBot environment is selected."
+        echo "Run 'tb4-select' first."
+    fi
+    return 1
+}
+
 # Echo a transform from the currently selected robot's TF tree.
-# Frame names are intentionally unqualified: e.g. base_link, odom,
-# rplidar_link. The selected robot is identified by ROBOT_NAMESPACE.
+#
+# The caller uses ordinary, unqualified frame names such as odom, base_link,
+# and rplidar_link.  The selected robot is determined by ROBOT_NAMESPACE.
+# tf2_echo normally subscribes to absolute /tf and /tf_static; remap those to
+# relative names so the node namespace selects /<robot>/tf and
+# /<robot>/tf_static.
 tb4-tf()
 {
-    _jmu_tb4_require_robot_namespace || return 1
+    _jmu_tb4_require_single_robot || return 1
 
     if [ "$#" -lt 2 ]; then
         echo "Usage: tb4-tf <target-frame> <source-frame> [tf2_echo options]"
@@ -280,10 +515,11 @@ tb4-tf()
         -r /tf_static:=tf_static
 }
 
-# Generate a PDF/DOT view of the currently selected robot's TF tree.
+# Generate the standard tf2_tools frame graph for the currently selected
+# robot.  Output files are written by view_frames in the current directory.
 tb4-tf-tree()
 {
-    _jmu_tb4_require_robot_namespace || return 1
+    _jmu_tb4_require_single_robot || return 1
 
     ros2 run tf2_tools view_frames \
         --ros-args \
@@ -292,9 +528,10 @@ tb4-tf-tree()
         -r /tf_static:=tf_static
 }
 
-# Initialize every new interactive shell.
+# Initialize every shell that sources this file.
 if [ -r "$_JMU_TB4_SELECTION_FILE" ]; then
     _jmu_tb4_saved_selection=$(<"$_JMU_TB4_SELECTION_FILE")
+
     if ! _jmu_tb4_apply "$_jmu_tb4_saved_selection"; then
         _jmu_tb4_clear
     fi
@@ -302,4 +539,8 @@ else
     _jmu_tb4_clear
 fi
 
-_jmu_tb4_print_status
+# Keep noninteractive/script use quiet.
+if [[ $- == *i* ]]; then
+    _jmu_tb4_print_status
+fi
+
