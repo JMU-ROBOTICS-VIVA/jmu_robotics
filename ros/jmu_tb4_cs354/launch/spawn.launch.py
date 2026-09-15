@@ -29,7 +29,8 @@ from launch.substitutions import (
     PythonExpression,
 )
 
-from launch_ros.actions import Node, PushRosNamespace
+from launch_ros.actions import Node, PushRosNamespace, SetRemap
+from nav2_common.launch import RewrittenYaml
 
 ARGUMENTS = [
     DeclareLaunchArgument('rviz', default_value='false',
@@ -137,12 +138,37 @@ def generate_launch_description():
     yaw = LaunchConfiguration('yaw')
     turtlebot4_node_yaml_file = LaunchConfiguration('param_file')
 
+    # AMCL normally waits for an RViz /initialpose message. In simulation we
+    # already know the exact spawn pose, so initialize AMCL from the same x, y,
+    # and yaw arguments used to place the robot in Gazebo.
+    localization_params = PathJoinSubstitution([
+        pkg_turtlebot4_navigation,
+        'config',
+        'localization.yaml',
+    ])
+    configured_localization_params = RewrittenYaml(
+        source_file=localization_params,
+        param_rewrites={
+            'amcl.ros__parameters.set_initial_pose': 'true',
+            'amcl.ros__parameters.initial_pose.x': x,
+            'amcl.ros__parameters.initial_pose.y': y,
+            'amcl.ros__parameters.initial_pose.z': '0.0',
+            'amcl.ros__parameters.initial_pose.yaw': yaw,
+        },
+        convert_types=True,
+    )
+
     robot_name = GetNamespacedName(namespace, 'turtlebot4')
     dock_name = GetNamespacedName(namespace, 'standard_dock')
 
 
     spawn_robot_group_action = GroupAction([
         PushRosNamespace(namespace),
+
+        # tf2 uses absolute /tf and /tf_static by default. Remap those names
+        # to relative names so the selected robot namespace is applied.
+        SetRemap(src='/tf', dst='tf'),
+        SetRemap(src='/tf_static', dst='tf_static'),
 
         # Robot description
         IncludeLaunchDescription(
@@ -233,11 +259,7 @@ def generate_launch_description():
             output='screen',
             arguments=[
                 '0', '0', '0', '0', '0', '0.0',
-                'rplidar_link', [robot_name, '/rplidar_link/rplidar']],
-            remappings=[
-                ('/tf', 'tf'),
-                ('/tf_static', 'tf_static'),
-            ]
+                'rplidar_link', [robot_name, '/rplidar_link/rplidar']]
         ),
 
         # OAKD static transform
@@ -252,10 +274,6 @@ def generate_launch_description():
                 '1.5707', '-1.5707', '0',
                 'oakd_rgb_camera_optical_frame',
                 [robot_name, '/oakd_rgb_camera_frame/rgbd_camera']
-            ],
-            remappings=[
-                ('/tf', 'tf'),
-                ('/tf_static', 'tf_static'),
             ]
         ),
     ])
@@ -266,7 +284,8 @@ def generate_launch_description():
         launch_arguments=[
             ('namespace', namespace),
             ('use_sim_time', use_sim_time),
-            ('map',LaunchConfiguration('map'))
+            ('map', LaunchConfiguration('map')),
+            ('params', configured_localization_params),
         ],
         condition=IfCondition(LaunchConfiguration('localization'))
     )

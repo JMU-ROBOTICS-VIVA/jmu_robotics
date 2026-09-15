@@ -1,18 +1,28 @@
 import os
-from pathlib import Path
+import re
+import subprocess
 
 from ament_index_python.packages import get_package_share_directory
 
 from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
+    GroupAction,
     IncludeLaunchDescription,
-    LogInfo,
     OpaqueFunction,
     SetLaunchConfiguration,
+    TimerAction,
 )
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import EnvironmentVariable, LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import (
+    EnvironmentVariable,
+    LaunchConfiguration,
+    PathJoinSubstitution,
+    PythonExpression,
+)
+from launch_ros.actions import Node, PushRosNamespace, SetRemap
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def check_ros_domain_id():
@@ -33,78 +43,79 @@ def check_ros_domain_id():
         )
 
 
-def resolve_world_path(world_argument, turtlebot_share):
-    """Resolve a user-friendly world argument to an absolute SDF path.
-
-    Resolution rules:
-      * absolute path or ~/...: use that filesystem path
-      * ./... or ../...: resolve relative to the current working directory
-      * bare name (maze or maze.sdf): use turtlebot4_gz_bringup/worlds/
-      * other relative path: resolve relative to turtlebot4_gz_bringup
-    """
-    requested = os.path.expanduser(world_argument.strip())
-    if not requested:
-        raise RuntimeError('The world launch argument may not be empty.')
-
-    if os.path.isabs(requested):
-        world_path = Path(requested)
-    elif requested.startswith('./') or requested.startswith('../'):
-        world_path = Path(requested).resolve()
-    else:
-        relative_path = Path(requested)
-
-        # A bare world name is the common classroom case.  Add .sdf if the
-        # user omitted it, then look in the stock TurtleBot worlds directory.
-        if len(relative_path.parts) == 1:
-            if relative_path.suffix == '':
-                relative_path = relative_path.with_suffix('.sdf')
-            relative_path = Path('worlds') / relative_path
-
-        world_path = Path(turtlebot_share) / relative_path
-
-    world_path = world_path.resolve()
-
-    if not world_path.is_file():
-        raise RuntimeError(
-            '\n\n'
-            '============================================================\n'
-            'JMU TurtleBot 4 simulator world error\n'
-            '============================================================\n'
-            f'Could not find the requested Gazebo world:\n  {world_argument}\n\n'
-            f'Resolved path:\n  {world_path}\n\n'
-            'Examples:\n'
-            '  world:=maze\n'
-            '  world:=maze.sdf\n'
-            '  world:=worlds/maze.sdf\n'
-            '  world:=./my_worlds/test.sdf\n'
-            '  world:=/absolute/path/to/test.sdf\n'
-            '============================================================\n'
+def find_gazebo_sim_processes():
+    """Return running Gazebo Sim processes that could conflict with a new sim."""
+    try:
+        result = subprocess.run(
+            ['ps', '-eo', 'pid=,comm=,args='],
+            check=True,
+            capture_output=True,
+            text=True,
         )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise RuntimeError(
+            'Unable to check for an existing Gazebo simulation before launch. '
+            'Refusing to start the simulator.\n'
+            f'Details: {exc}'
+        ) from exc
 
-    return str(world_path)
+    matches = []
+    gz_sim_command = re.compile(r'(?:^|[\s/])gz\s+sim(?:\s|$)')
+
+    for line in result.stdout.splitlines():
+        fields = line.strip().split(None, 2)
+        if len(fields) < 3:
+            continue
+
+        pid, command, args = fields
+        if (
+            command in {'gz-sim-server', 'gz-sim-gui'}
+            or gz_sim_command.search(args)
+        ):
+            matches.append((pid, args))
+
+    return matches
 
 
-def resolve_world_arguments(context, turtlebot_share):
-    requested_world = LaunchConfiguration('world').perform(context)
-    resolved_world = resolve_world_path(requested_world, turtlebot_share)
+def check_no_existing_gazebo_sim():
+    processes = find_gazebo_sim_processes()
+    if not processes:
+        return
 
-    requested_world_name = LaunchConfiguration('world_name').perform(context).strip()
-    resolved_world_name = requested_world_name or Path(resolved_world).stem
+    process_text = '\n'.join(
+        f'  PID {pid}: {args}' for pid, args in processes
+    )
+    raise RuntimeError(
+        '\n\n'
+        '============================================================\n'
+        'JMU TurtleBot 4 simulator startup blocked\n'
+        '============================================================\n'
+        'An existing Gazebo simulation process is still running.\n'
+        'Starting another simulator could connect to or conflict with the\n'
+        'existing Gazebo server.\n\n'
+        f'{process_text}\n\n'
+        'Run:\n'
+        '  ros_tb4_cleanup.sh\n\n'
+        'Then launch the simulator again.\n'
+        '============================================================\n'
+    )
 
-    return [
-        SetLaunchConfiguration('resolved_world', resolved_world),
-        SetLaunchConfiguration('resolved_world_name', resolved_world_name),
-        LogInfo(
-            msg=(
-                f'Gazebo world: {resolved_world} '
-                f'(world name: {resolved_world_name})'
-            )
-        ),
-    ]
+
+def enable_map_when_localizing(context):
+    """Localization always requires a map, so make map mode implicit."""
+    localization_enabled = (
+        LaunchConfiguration('localization').perform(context).lower() == 'true'
+    )
+
+    if localization_enabled:
+        return [SetLaunchConfiguration('map', 'true')]
+
+    return []
 
 
 def generate_launch_description():
     check_ros_domain_id()
+    check_no_existing_gazebo_sim()
 
     # Package directories
     pkg_jmu_tb4 = get_package_share_directory('jmu_tb4_cs354')
@@ -123,12 +134,27 @@ def generate_launch_description():
         'spawn.launch.py'
     ])
 
-    # Default map, used only if localization is requested
+    # Map-oriented RViz configuration used only when map:=true.
+    map_rviz_config = PathJoinSubstitution([
+        pkg_jmu_tb4,
+        'rviz',
+        'map.rviz'
+    ])
+
+    # Default stock TurtleBot world
+    default_world = PathJoinSubstitution([
+        pkg_tb4_gz,
+        'worlds',
+        'warehouse.sdf'
+    ])
+
+    # Default map for localization or the lightweight teaching map mode.
     default_map = PathJoinSubstitution([
         pkg_tb4_navigation,
         'maps',
         'warehouse.yaml'
     ])
+
     arguments = [
         DeclareLaunchArgument(
             'namespace',
@@ -140,19 +166,13 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'world',
-            default_value='warehouse',
-            description=(
-                'Gazebo world: a stock TurtleBot world name, a path relative to '
-                'turtlebot4_gz_bringup, or an explicit filesystem path'
-            )
+            default_value=default_world,
+            description='Full path to the Gazebo SDF world file'
         ),
         DeclareLaunchArgument(
             'world_name',
-            default_value='',
-            description=(
-                'Name of the world inside the SDF file; by default it is '
-                'inferred from the SDF filename'
-            )
+            default_value='warehouse',
+            description='Name of the world inside the SDF file'
         ),
         DeclareLaunchArgument(
             'resource_path',
@@ -208,10 +228,20 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'map',
+            default_value='false',
+            choices=['true', 'false'],
+            description=(
+                'Launch lightweight map teaching mode: map_server, an identity '
+                'map->odom transform, and RViz configured to display the map'
+            )
+        ),
+        DeclareLaunchArgument(
+            'map_yaml',
             default_value=default_map,
-            description='Map YAML file used for localization'
+            description='Map YAML file used by map mode or localization'
         ),
     ]
+
     for pose_element in ['x', 'y', 'z', 'yaw']:
         arguments.append(
             DeclareLaunchArgument(
@@ -221,48 +251,166 @@ def generate_launch_description():
             )
         )
 
-    # Resolve the user-facing world argument before starting Gazebo or spawning
-    # the robot.  The lower-level launch files continue to receive the full SDF
-    # path and the actual Gazebo world name they expect.
-    world_resolver = OpaqueFunction(
-        function=resolve_world_arguments,
-        args=[pkg_tb4_gz],
+    # Localization always works against a map. Promote map:=true before any
+    # map/RViz conditions are evaluated. The lightweight standalone map_server
+    # remains suppressed while localization is active; localization owns it.
+    configure_map_for_localization = OpaqueFunction(
+        function=enable_map_when_localizing
     )
 
     # Start Gazebo.
     simulator = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([sim_launch]),
         launch_arguments={
-            'world': LaunchConfiguration('resolved_world'),
+            'world': LaunchConfiguration('world'),
             'resource_path': LaunchConfiguration('resource_path'),
             'model': LaunchConfiguration('model'),
             'use_sim_time': LaunchConfiguration('use_sim_time'),
             'gazebo_gui': LaunchConfiguration('gazebo_gui'),
         }.items()
     )
-    # Spawn the TurtleBot and optionally start navigation components.
-    robot = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource([spawn_launch]),
-        launch_arguments={
-            'namespace': LaunchConfiguration('namespace'),
-            'model': LaunchConfiguration('model'),
-            'world': LaunchConfiguration('resolved_world_name'),
-            'x': LaunchConfiguration('x'),
-            'y': LaunchConfiguration('y'),
-            'z': LaunchConfiguration('z'),
-            'yaw': LaunchConfiguration('yaw'),
-            'map': LaunchConfiguration('map'),
-            'localization': LaunchConfiguration('localization'),
-            'slam': LaunchConfiguration('slam'),
-            'nav2': LaunchConfiguration('nav2'),
-            'rviz': LaunchConfiguration('rviz'),
-            'rviz_delay': LaunchConfiguration('rviz_delay'),
-            'use_sim_time': LaunchConfiguration('use_sim_time'),
-        }.items()
+
+    # When map mode is active, tb4_sim.launch.py launches the map-oriented RViz
+    # instance below. Suppress spawn.launch.py's normal base_link RViz instance
+    # so that we do not start two copies of RViz.
+    # Evaluate this in the parent context before entering the scoped spawn
+    # include. That matters because spawn.launch.py itself uses the name 'map'
+    # for the YAML filename.
+    configure_spawn_rviz = SetLaunchConfiguration(
+        'spawn_rviz',
+        PythonExpression([
+            "'true' if ('", LaunchConfiguration('rviz'), "' == 'true' and '",
+            LaunchConfiguration('map'), "' == 'false') else 'false'"
+        ])
     )
+
+    # Spawn the TurtleBot and optionally start navigation components.
+    # Keep the include scoped because spawn.launch.py also has a launch argument
+    # named 'map'. Inside that scope it receives the YAML filename; outside the
+    # scope our top-level 'map' argument remains the boolean teaching-mode flag.
+    robot = GroupAction(
+        scoped=True,
+        actions=[
+            IncludeLaunchDescription(
+                PythonLaunchDescriptionSource([spawn_launch]),
+                launch_arguments={
+                    'namespace': LaunchConfiguration('namespace'),
+                    'model': LaunchConfiguration('model'),
+                    'world': LaunchConfiguration('world_name'),
+                    'x': LaunchConfiguration('x'),
+                    'y': LaunchConfiguration('y'),
+                    'z': LaunchConfiguration('z'),
+                    'yaw': LaunchConfiguration('yaw'),
+                    'map': LaunchConfiguration('map_yaml'),
+                    'localization': LaunchConfiguration('localization'),
+                    'slam': LaunchConfiguration('slam'),
+                    'nav2': LaunchConfiguration('nav2'),
+                    'rviz': LaunchConfiguration('spawn_rviz'),
+                    'rviz_delay': LaunchConfiguration('rviz_delay'),
+                    'use_sim_time': LaunchConfiguration('use_sim_time'),
+                }.items()
+            )
+        ]
+    )
+
+    # Lightweight teaching map mode. If localization or SLAM is explicitly
+    # requested, do not publish our static map->odom transform or launch this
+    # standalone map_server because those stacks own map localization/mapping.
+    lightweight_map_condition = IfCondition(PythonExpression([
+        "'", LaunchConfiguration('map'), "' == 'true' and '",
+        LaunchConfiguration('localization'), "' == 'false' and '",
+        LaunchConfiguration('slam'), "' == 'false'"
+    ]))
+
+    map_support = GroupAction(
+        scoped=True,
+        condition=lightweight_map_condition,
+        actions=[
+            PushRosNamespace(LaunchConfiguration('namespace')),
+            SetRemap(src='/tf', dst='tf'),
+            SetRemap(src='/tf_static', dst='tf_static'),
+            Node(
+                package='nav2_map_server',
+                executable='map_server',
+                name='map_server',
+                output='screen',
+                parameters=[{
+                    'use_sim_time': LaunchConfiguration('use_sim_time'),
+                    'yaml_filename': ParameterValue(
+                        LaunchConfiguration('map_yaml'),
+                        value_type=str,
+                    ),
+                }],
+            ),
+            Node(
+                package='nav2_lifecycle_manager',
+                executable='lifecycle_manager',
+                name='lifecycle_manager_map',
+                output='screen',
+                parameters=[{
+                    'use_sim_time': LaunchConfiguration('use_sim_time'),
+                    'autostart': True,
+                    'node_names': ['map_server'],
+                }],
+            ),
+            Node(
+                package='tf2_ros',
+                executable='static_transform_publisher',
+                name='map_to_odom_static_tf',
+                output='screen',
+                arguments=[
+                    '--x', '0.0',
+                    '--y', '0.0',
+                    '--z', '0.0',
+                    '--roll', '0.0',
+                    '--pitch', '0.0',
+                    '--yaw', '0.0',
+                    '--frame-id', 'map',
+                    '--child-frame-id', 'odom',
+                ],
+            ),
+        ]
+    )
+
+    # In map mode, start RViz already configured with Fixed Frame=map and an
+    # enabled Map display using Transient Local durability on the relative
+    # topic 'map' (which resolves to /<namespace>/map).
+    map_rviz_condition = IfCondition(PythonExpression([
+        "'", LaunchConfiguration('map'), "' == 'true' and '",
+        LaunchConfiguration('rviz'), "' == 'true'"
+    ]))
+
+    map_rviz = TimerAction(
+        period=LaunchConfiguration('rviz_delay'),
+        actions=[
+            GroupAction(
+                scoped=True,
+                condition=map_rviz_condition,
+                actions=[
+                    PushRosNamespace(LaunchConfiguration('namespace')),
+                    SetRemap(src='/tf', dst='tf'),
+                    SetRemap(src='/tf_static', dst='tf_static'),
+                    Node(
+                        package='rviz2',
+                        executable='rviz2',
+                        name='rviz2',
+                        output='screen',
+                        arguments=['-d', map_rviz_config],
+                        parameters=[{
+                            'use_sim_time': LaunchConfiguration('use_sim_time')
+                        }],
+                    ),
+                ]
+            )
+        ]
+    )
+
     ld = LaunchDescription(arguments)
-    ld.add_action(world_resolver)
+    ld.add_action(configure_map_for_localization)
     ld.add_action(simulator)
+    ld.add_action(configure_spawn_rviz)
     ld.add_action(robot)
+    ld.add_action(map_support)
+    ld.add_action(map_rviz)
 
     return ld
