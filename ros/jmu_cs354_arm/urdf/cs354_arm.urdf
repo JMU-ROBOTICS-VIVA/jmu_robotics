@@ -1,0 +1,115 @@
+<?xml version="1.0"?>
+<robot name="cs354_arm">
+
+  <!-- ============================================================ -->
+  <!-- BASE                                                         -->
+  <!-- ============================================================ -->
+
+  <link name="base">
+    <visual>
+      <!-- Base extends upward from z=0 to z=.08 -->
+      <origin xyz="0 0 0.04" rpy="0 0 0"/>
+      <geometry>
+        <cylinder radius="0.04" length="0.08"/>
+      </geometry>
+      <material name="base_gray">
+        <color rgba="0.5 0.5 0.5 1.0"/>
+      </material>
+    </visual>
+  </link>
+
+
+  <!-- ============================================================ -->
+  <!-- SHOULDER                                                     -->
+  <!-- ============================================================ -->
+
+  <link name="shoulder">
+    <visual>
+      <!-- Link from shoulder to elbow: .15 m -->
+      <origin xyz="0 0 0.075" rpy="0 0 0"/>
+      <geometry>
+        <cylinder radius="0.015" length="0.15"/>
+      </geometry>
+      <material name="shoulder_color">
+        <color rgba="0.3 0.5 0.8 1.0"/>
+      </material>
+    </visual>
+  </link>
+
+  <joint name="shoulder_joint" type="revolute">
+    <parent link="base"/>
+    <child link="shoulder"/>
+
+    <!-- Shoulder is 8 cm above the base frame -->
+    <origin xyz="0 0 0.08" rpy="0 0 0"/>
+
+    <!-- Shoulder rotates about Z -->
+    <axis xyz="0 0 1"/>
+
+    <limit lower="-3.14159"
+           upper="3.14159"
+           effort="1.0"
+           velocity="1.0"/>
+  </joint>
+
+
+  <!-- ============================================================ -->
+  <!-- ELBOW                                                        -->
+  <!-- ============================================================ -->
+
+  <link name="elbow">
+    <visual>
+      <!-- Link from elbow to gripper: .18 m -->
+      <origin xyz="0 0 0.09" rpy="0 0 0"/>
+      <geometry>
+        <cylinder radius="0.012" length="0.18"/>
+      </geometry>
+      <material name="elbow_color">
+        <color rgba="0.8 0.4 0.3 1.0"/>
+      </material>
+    </visual>
+  </link>
+
+  <joint name="elbow_joint" type="revolute">
+    <parent link="shoulder"/>
+    <child link="elbow"/>
+
+    <!-- Elbow is 15 cm from shoulder -->
+    <origin xyz="0 0 0.15" rpy="0 0 0"/>
+
+    <!-- Elbow rotates about Y -->
+    <axis xyz="0 1 0"/>
+
+    <limit lower="-3.14159"
+           upper="3.14159"
+           effort="1.0"
+           velocity="1.0"/>
+  </joint>
+
+
+  <!-- ============================================================ -->
+  <!-- GRIPPER                                                      -->
+  <!-- ============================================================ -->
+
+  <link name="gripper">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <sphere radius="0.025"/>
+      </geometry>
+      <material name="gripper_color">
+        <color rgba="0.3 0.8 0.3 1.0"/>
+      </material>
+    </visual>
+  </link>
+
+  <joint name="gripper_joint" type="fixed">
+    <parent link="elbow"/>
+    <child link="gripper"/>
+
+    <!-- Gripper is 18 cm from elbow -->
+    <origin xyz="0 0 0.18" rpy="0 0 0"/>
+  </joint>
+
+</robot>
+
