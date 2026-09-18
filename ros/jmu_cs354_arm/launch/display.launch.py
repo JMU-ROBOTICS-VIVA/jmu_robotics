@@ -17,6 +17,12 @@ def generate_launch_description():
         'cs354_arm.urdf'
     )
 
+    rviz_config = os.path.join(
+        package_dir,
+        'rviz',
+        'arm.rviz'
+    )
+
     with open(urdf_file, 'r') as f:
         robot_description = f.read()
 
@@ -50,6 +56,7 @@ def generate_launch_description():
             package='rviz2',
             executable='rviz2',
             name='rviz2',
+            arguments=['-d', rviz_config],
             output='screen'
         ),
     ])
