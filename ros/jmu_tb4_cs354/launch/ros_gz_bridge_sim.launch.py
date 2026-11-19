@@ -7,7 +7,8 @@
 #   * depth image -> oakd/stereo/image_raw
 #   * duplicate Gazebo camera_info -> oakd/stereo/camera_info
 #   * do not bridge the simulator-only PointCloud2 stream
-#   * lazily publish oakd/rgb/preview/image_raw/compressed using image_transport
+#   * lazily publish preview and HD RGB compressed streams using image_transport
+#   * add a separate HD RGB camera stream while preserving RGBD preview/depth
 
 from ament_index_python.packages import get_package_share_directory
 
@@ -206,6 +207,33 @@ def generate_launch_description():
         ],
     )
 
+    # This is a separate camera sensor on the same optical assembly as the
+    # original RGBD sensor.  It publishes full-resolution RGB, while the
+    # existing preview and stereo/depth topics above remain unchanged.
+    hd_camera_prefix = [
+        '/world/', world,
+        '/model/', robot_name,
+        '/link/oakd_rgb_camera_frame/sensor/rgb_camera_hd/',
+    ]
+    hd_rgb_gz_topic = hd_camera_prefix + ['image']
+    hd_info_gz_topic = hd_camera_prefix + ['camera_info']
+
+    oakd_hd_camera_bridge = Node(
+        package='ros_gz_bridge',
+        executable='parameter_bridge',
+        name='hd_camera_bridge',
+        output='screen',
+        parameters=[{'use_sim_time': use_sim_time}],
+        arguments=[
+            hd_rgb_gz_topic + ['@sensor_msgs/msg/Image[gz.msgs.Image'],
+            hd_info_gz_topic + ['@sensor_msgs/msg/CameraInfo[gz.msgs.CameraInfo'],
+        ],
+        remappings=[
+            (hd_rgb_gz_topic, 'oakd/rgb/image_raw'),
+            (hd_info_gz_topic, 'oakd/rgb/camera_info'),
+        ],
+    )
+
     # Gazebo's single RGBD sensor provides one CameraInfo stream.  Publish
     # the same simulated calibration metadata under the physical robot's
     # stereo CameraInfo path as a compatibility approximation.
@@ -224,9 +252,8 @@ def generate_launch_description():
     )
 
     # Jazzy image_transport's republisher is a composable component.
-    # With out_transport=compressed it only subscribes to the raw stream
-    # when something subscribes to the compressed output, avoiding JPEG
-    # encoding cost when students are not using the compressed topic.
+    # Publish compressed variants only on demand (no idle JPEG work),
+    # both for the existing low-resolution preview and the new HD image.
     rgb_compressed_container = ComposableNodeContainer(
         name='sim_image_transport_container',
         namespace='',
@@ -248,6 +275,20 @@ def generate_launch_description():
                     ('out/compressed', 'oakd/rgb/preview/image_raw/compressed'),
                 ],
             ),
+            ComposableNode(
+                package='image_transport',
+                plugin='image_transport::Republisher',
+                name='rgb_hd_compressed_republisher',
+                parameters=[{
+                    'use_sim_time': use_sim_time,
+                    'in_transport': 'raw',
+                    'out_transport': 'compressed',
+                }],
+                remappings=[
+                    ('in', 'oakd/rgb/image_raw'),
+                    ('out/compressed', 'oakd/rgb/image_raw/compressed'),
+                ],
+            ),
         ],
     )
 
@@ -258,6 +299,7 @@ def generate_launch_description():
     ld.add_action(hmi_led_msg_bridge)
     ld.add_action(lidar_bridge)
     ld.add_action(oakd_camera_bridge)
+    ld.add_action(oakd_hd_camera_bridge)
     ld.add_action(oakd_stereo_info_bridge)
     ld.add_action(rgb_compressed_container)
     return ld
