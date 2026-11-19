@@ -39,8 +39,8 @@ else
     echo "WARNING: JMU CS354 ROS installation was not found."
 fi
 
-if [ -r "$HOME/rosdev/install/local_setup.bash" ]; then
-    source "$HOME/rosdev/install/local_setup.bash"
+if [ -r "$HOME/dev_ws/install/local_setup.bash" ]; then
+    source "$HOME/dev_ws/install/local_setup.bash"
 fi
 
 export RMW_IMPLEMENTATION=rmw_fastrtps_cpp

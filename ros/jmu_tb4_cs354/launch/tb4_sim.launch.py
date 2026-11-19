@@ -134,11 +134,12 @@ def generate_launch_description():
         'spawn.launch.py'
     ])
 
-    # Map-oriented RViz configuration used only when map:=true.
-    map_rviz_config = PathJoinSubstitution([
-        pkg_jmu_tb4,
-        'rviz',
-        'map.rviz'
+    # Default views remain those used for ordinary CS354 simulations.
+    default_rviz_config = PathJoinSubstitution([
+        pkg_jmu_tb4, 'rviz', 'map.rviz'
+    ])
+    default_gui_config = PathJoinSubstitution([
+        pkg_jmu_tb4, 'gui', 'cs354.gui.config'
     ])
 
     # Default stock TurtleBot world
@@ -227,6 +228,16 @@ def generate_launch_description():
             description='Launch the Gazebo graphical client'
         ),
         DeclareLaunchArgument(
+            'gui_config',
+            default_value=default_gui_config,
+            description='Gazebo GUI configuration (default: CS354 classroom)'
+        ),
+        DeclareLaunchArgument(
+            'rviz_config',
+            default_value=default_rviz_config,
+            description='RViz map-view configuration (default: CS354 map)'
+        ),
+        DeclareLaunchArgument(
             'map',
             default_value='false',
             choices=['true', 'false'],
@@ -267,6 +278,7 @@ def generate_launch_description():
             'model': LaunchConfiguration('model'),
             'use_sim_time': LaunchConfiguration('use_sim_time'),
             'gazebo_gui': LaunchConfiguration('gazebo_gui'),
+            'gui_config': LaunchConfiguration('gui_config'),
         }.items()
     )
 
@@ -395,7 +407,7 @@ def generate_launch_description():
                         executable='rviz2',
                         name='rviz2',
                         output='screen',
-                        arguments=['-d', map_rviz_config],
+                        arguments=['-d', LaunchConfiguration('rviz_config')],
                         parameters=[{
                             'use_sim_time': LaunchConfiguration('use_sim_time')
                         }],

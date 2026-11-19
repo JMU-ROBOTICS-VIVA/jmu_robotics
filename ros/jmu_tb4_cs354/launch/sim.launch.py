@@ -94,13 +94,17 @@ def generate_launch_description():
         'gz_sim.launch.py',
     ])
 
-    # Use the JMU classroom GUI: 3D world + compact simulation controls,
-    # without the TurtleBot HMI / teleop or Gazebo object-editing toolbars.
-    gui_config = PathJoinSubstitution([
-        pkg_jmu_tb4,
-        'gui',
-        'cs354.gui.config',
+    # Default to the JMU classroom GUI, but allow callers to select a
+    # project-specific configuration without changing warehouse defaults.
+    default_gui_config = PathJoinSubstitution([
+        pkg_jmu_tb4, 'gui', 'cs354.gui.config'
     ])
+    gui_config_arg = DeclareLaunchArgument(
+        'gui_config',
+        default_value=default_gui_config,
+        description='Full path to Gazebo GUI configuration file',
+    )
+    gui_config = LaunchConfiguration('gui_config')
     # Normal classroom mode: run both the Gazebo server and graphical client.
     gazebo_with_gui = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([gz_sim_launch]),
@@ -143,6 +147,7 @@ def generate_launch_description():
     )
 
     ld = LaunchDescription(ARGUMENTS)
+    ld.add_action(gui_config_arg)
     ld.add_action(gz_resource_path)
     ld.add_action(gz_gui_plugin_path)
     ld.add_action(gazebo_with_gui)
